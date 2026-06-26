@@ -409,7 +409,7 @@ class BundleImageInputList(QListWidget):
                 seen_hashes.add(digest)
                 images.append(payload)
 
-        if mime_data.hasUrls():
+        if not images and mime_data.hasUrls():
             for url in mime_data.urls():
                 if not url.isLocalFile():
                     continue
