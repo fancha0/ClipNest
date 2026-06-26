@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import logging
 import re
@@ -14,6 +14,7 @@ from .services.clipboard_service import ClipboardService
 from .services.focus_service import FocusService, FocusTarget
 from .services.hotkey_service import HotkeyService
 from .services.paste_service import PasteService
+from .services.autostart_service import AutoStartService
 from .ui.main_window import MainWindow
 from .ui.theme import AppearanceSettings, default_appearance_settings, normalize_hex_color
 
@@ -36,6 +37,7 @@ class AppController:
         self._focus_service = focus_service
         self._hotkey_service = hotkey_service
         self._paste_service = paste_service
+        self._autostart_service = AutoStartService()
         self._pending_focus_target: Optional[FocusTarget] = None
         self._auto_hide_on_paste = AUTO_HIDE_ON_PASTE
         self._capture_tab_id: Optional[int] = None
@@ -68,6 +70,9 @@ class AppController:
         self._window.set_capture_tab(capture_tab_id, self._tab_name(tabs, capture_tab_id))
         self._window.set_note_style(note_color, note_font_size)
         self._window.set_hotkey_text(self._hotkey_service.hotkey_text)
+        autostart_enabled = self._autostart_service.is_enabled()
+        self._window.set_autostart_state(autostart_enabled)
+
         appearance = self._load_appearance_settings()
         self._save_appearance_settings(appearance)
         self._window.set_appearance(appearance)
@@ -127,6 +132,7 @@ class AppController:
         self._window.appearance_change_requested.connect(self._on_appearance_change_requested)
         self._window.start_inline_edit_requested.connect(self._on_start_inline_edit)
         self._window.save_inline_edit_requested.connect(self._on_save_inline_edit)
+        self._window.autostart_change_requested.connect(self._on_autostart_change_requested)
 
     def _parse_int_setting(self, key: str) -> Optional[int]:
         value = self._repository.get_setting(key)
@@ -249,6 +255,19 @@ class AppController:
         if clean_value == "":
             return
         self._repository.set_setting("main_splitter_sizes", clean_value)
+
+    def _on_autostart_change_requested(self, enabled: bool) -> None:
+        error = self._autostart_service.set_enabled(enabled)
+        if error:
+            self._window.show_error(f"设置开机自启失败：{error}")
+            self._window.set_autostart_state(not enabled)
+            return
+        actual = self._autostart_service.is_enabled()
+        self._window.set_autostart_state(actual)
+        if actual:
+            self._window.show_info("已开启开机自启动。")
+        else:
+            self._window.show_info("已关闭开机自启动。")
 
     def _on_appearance_change_requested(self, appearance: AppearanceSettings) -> None:
         defaults = default_appearance_settings()
@@ -824,3 +843,5 @@ class AppController:
             if tab.id == tab_id:
                 return tab.name
         return "未设置"
+
+

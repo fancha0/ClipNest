@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import hashlib
 import logging
@@ -1458,6 +1458,7 @@ class MainWindow(QMainWindow):
     move_items_requested = Signal(list, int)
     start_inline_edit_requested = Signal(int)
     save_inline_edit_requested = Signal(int, object)
+    autostart_change_requested = Signal(bool)
 
     def __init__(self) -> None:
         super().__init__()
@@ -1692,6 +1693,9 @@ class MainWindow(QMainWindow):
         self.action_export_data = QAction("导出标签页与条目...", self)
         self.action_import_data = QAction("导入标签页与条目...", self)
         self.action_reset_hotkey = QAction("恢复默认快捷键", self)
+        self.action_autostart = QAction("开机自启动", self)
+        self.action_autostart.setCheckable(True)
+        self.action_autostart.setChecked(False)
 
         self.settings_menu.addAction(self.action_current_hotkey)
         self.settings_menu.addAction(self.action_capture_tab)
@@ -1705,6 +1709,8 @@ class MainWindow(QMainWindow):
         self.settings_menu.addAction(self.action_export_data)
         self.settings_menu.addAction(self.action_import_data)
         self.settings_menu.addSeparator()
+        self.settings_menu.addAction(self.action_autostart)
+        self.settings_menu.addSeparator()
         self.settings_menu.addAction(self.action_reset_hotkey)
         self.settings_menu.setStyleSheet(self._menu_stylesheet())
         self.settings_button.clicked.connect(self._show_settings_menu)
@@ -1716,6 +1722,13 @@ class MainWindow(QMainWindow):
         self.action_export_data.triggered.connect(self.export_requested.emit)
         self.action_import_data.triggered.connect(self.import_requested.emit)
         self.action_reset_hotkey.triggered.connect(self.hotkey_reset_requested.emit)
+        self.action_autostart.triggered.connect(self._on_autostart_toggled)
+
+    def set_autostart_state(self, enabled: bool) -> None:
+        self.action_autostart.setChecked(enabled)
+
+    def _on_autostart_toggled(self, checked: bool) -> None:
+        self.autostart_change_requested.emit(checked)
 
     def _show_settings_menu(self) -> None:
         button_pos = self.settings_button.mapToGlobal(self.settings_button.rect().bottomLeft())
@@ -2603,3 +2616,5 @@ class MainWindow(QMainWindow):
 
     def _menu_stylesheet(self) -> str:
         return build_menu_stylesheet(self._theme_tokens)
+
+
