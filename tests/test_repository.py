@@ -279,6 +279,8 @@ class ClipRepositoryTests(unittest.TestCase):
         self.assertEqual(after_second, after_first)
         self.assertGreaterEqual(second.skipped_items, 2)
 
+        source_repo.close()
+        target_repo.close()
         pkg_path.unlink(missing_ok=True)
         target_db_path.unlink(missing_ok=True)
 

@@ -99,6 +99,7 @@ class AppController:
 
     def shutdown(self) -> None:
         self._hotkey_service.stop()
+        self._repository.close()
 
     def _connect_signals(self) -> None:
         self._clipboard_service.parsed_captured.connect(self._on_clipboard_parsed_captured)
@@ -675,7 +676,7 @@ class AppController:
         if self._search_query:
             self._refresh_items(current_tab_id or tab_id)
         elif current_tab_id == tab_id:
-            self._refresh_items(tab_id)
+            self._window.prepend_item(inserted)
 
     def _on_hotkey_change_requested(self, raw_hotkey: str) -> None:
         normalized, error = HotkeyService.normalize_hotkey(raw_hotkey)

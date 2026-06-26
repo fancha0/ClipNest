@@ -1843,6 +1843,48 @@ class MainWindow(QMainWindow):
         finally:
             self._suppress_item_reorder_emit = False
 
+    def prepend_item(self, item: ClipItem) -> None:
+        if self._item_list_search_mode:
+            return
+        row = present_item(item)
+        lw_item = QListWidgetItem(row.primary_text)
+        lw_item.setFlags(
+            lw_item.flags()
+            | Qt.ItemFlag.ItemIsDragEnabled
+            | Qt.ItemFlag.ItemIsDropEnabled
+        )
+        lw_item.setToolTip(row.tooltip_text)
+        row_height = 92 if (row.icon_kind == "image" and item.thumb_blob) else 76
+        lw_item.setSizeHint(QSize(0, row_height))
+
+        icon = None
+        if row.icon_kind == "image" and item.thumb_blob:
+            pixmap = QPixmap()
+            if pixmap.loadFromData(item.thumb_blob, "PNG"):
+                icon = QIcon(pixmap)
+        elif row.icon_kind == "file" and row.file_icon_path:
+            file_icon = QFileIconProvider().icon(QFileInfo(row.file_icon_path))
+            if not file_icon.isNull():
+                icon = file_icon
+        elif row.icon_kind == "special":
+            icon = self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxWarning)
+        elif row.icon_kind == "bundle":
+            icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogContentsView)
+        if icon is not None:
+            lw_item.setIcon(icon)
+
+        lw_item.setData(ITEM_ID_ROLE, item.id)
+        lw_item.setData(ITEM_TYPE_ROLE, item.content_type)
+        lw_item.setData(ITEM_TEXT_ROLE, item.plain_text or item.text)
+        lw_item.setData(ITEM_NOTE_ROLE, item.note or "")
+        lw_item.setData(ITEM_HAS_NOTE_ROLE, row.has_note)
+        lw_item.setData(ITEM_NOTE_TEXT_ROLE, row.note_text)
+        lw_item.setData(ITEM_CONTENT_TEXT_ROLE, row.content_text)
+        lw_item.setData(ITEM_TAB_ID_ROLE, int(item.tab_id))
+        lw_item.setData(ITEM_SECONDARY_TEXT_ROLE, row.secondary_text)
+        lw_item.setData(ITEM_TYPE_LABEL_ROLE, row.type_label)
+        self.item_list.insertItem(0, lw_item)
+
     def _on_search_input_changed(self, _text: str) -> None:
         has_text = self.search_input.text().strip() != ""
         self.clear_search_btn.setVisible(has_text)

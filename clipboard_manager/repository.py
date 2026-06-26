@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import base64
 import hashlib
@@ -37,25 +37,40 @@ class ClipRepository:
         self.db_path = Path(db_path)
         self.max_items_per_tab = max_items_per_tab
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._conn = None
         self._initialize()
 
     def _open_connection(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
+        conn.execute("PRAGMA cache_size = -8000")
         return conn
+
+    def _get_conn(self):
+        if self._conn is None:
+            self._conn = self._open_connection()
+        return self._conn
 
     @contextmanager
     def _connect(self):
-        conn = self._open_connection()
+        conn = self._get_conn()
         try:
             yield conn
             conn.commit()
         except Exception:
             conn.rollback()
             raise
-        finally:
-            conn.close()
+
+    def close(self) -> None:
+        if self._conn is not None:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+            self._conn = None
 
     def _initialize(self) -> None:
         with self._connect() as conn:
