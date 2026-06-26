@@ -465,6 +465,11 @@ class BundleImageInputList(QListWidget):
 
     @staticmethod
     def _image_fingerprint(image: QImage) -> str:
+        import hashlib
+        ptr = image.bits()
+        if ptr is not None:
+            data = bytes(image.sizeInBytes())
+            return hashlib.md5(data).hexdigest() + f":{image.width()}x{image.height()}"
         return f"{image.cacheKey()}:{image.width()}x{image.height()}"
 
     @staticmethod
@@ -817,7 +822,7 @@ class MixedContentEdit(QTextEdit):
                 seen_fingerprints.add(finger)
                 images.append({"qimage": image, "mime_type": "image/png"})
 
-        if mime_data.hasUrls():
+        if not images and mime_data.hasUrls():
             for url in mime_data.urls():
                 if not url.isLocalFile():
                     continue
@@ -869,6 +874,11 @@ class MixedContentEdit(QTextEdit):
 
     @staticmethod
     def _image_fingerprint(image: QImage) -> str:
+        import hashlib
+        ptr = image.bits()
+        if ptr is not None:
+            data = bytes(image.sizeInBytes())
+            return hashlib.md5(data).hexdigest() + f":{image.width()}x{image.height()}"
         return f"{image.cacheKey()}:{image.width()}x{image.height()}"
 
     @staticmethod
