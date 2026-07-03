@@ -4,6 +4,7 @@ import hashlib
 import logging
 import re
 import sys
+import time
 from typing import Any, Optional
 
 from PySide6.QtCore import (
@@ -92,6 +93,7 @@ ITEM_CONTENT_TEXT_ROLE = ITEM_ID_ROLE + 6
 ITEM_TAB_ID_ROLE = ITEM_ID_ROLE + 7
 ITEM_SECONDARY_TEXT_ROLE = ITEM_ID_ROLE + 8
 ITEM_TYPE_LABEL_ROLE = ITEM_ID_ROLE + 9
+ITEM_PINNED_ROLE = ITEM_ID_ROLE + 10
 
 logger = logging.getLogger(__name__)
 
@@ -1457,6 +1459,7 @@ class MainWindow(QMainWindow):
     edit_item_image_requested = Signal(int, object, str, int, int, str)
     edit_bundle_requested = Signal(int)
     edit_note_requested = Signal(int, str)
+    item_pin_change_requested = Signal(int, bool)
     delete_item_requested = Signal(int)
     clear_items_requested = Signal(int)
     item_activated = Signal(int)
@@ -1499,6 +1502,19 @@ class MainWindow(QMainWindow):
         self._suppress_item_reorder_emit = False
         self._item_list_search_mode = False
         self._last_selected_item_id: Optional[int] = None
+        self._item_render_generation = 0
+        self._pending_render_items: list[ClipItem] = []
+        self._pending_render_index = 0
+        self._pending_render_search_mode = False
+        self._pending_render_tab_name_map: dict[int, str] = {}
+        self._pending_render_restore_id: Optional[int] = None
+        self._pending_render_drag_enabled = True
+        self._pending_render_file_icon_provider: Optional[QFileIconProvider] = None
+        self._pending_render_started_at = 0.0
+        self._pending_render_first_batch_logged = False
+        self._item_render_timer = QTimer(self)
+        self._item_render_timer.setSingleShot(True)
+        self._item_render_timer.timeout.connect(self._render_next_item_batch)
         self._search_debounce_timer = QTimer(self)
         self._search_debounce_timer.setSingleShot(True)
         self._search_debounce_timer.setInterval(200)
@@ -1786,100 +1802,135 @@ class MainWindow(QMainWindow):
         search_mode: bool = False,
         tab_name_map: Optional[dict[int, str]] = None,
     ) -> None:
+        self._item_render_timer.stop()
+        self._item_render_generation += 1
         self._item_list_search_mode = bool(search_mode)
         drag_enabled = not self._item_list_search_mode
-        self.item_list.set_reorder_enabled(drag_enabled)
+        self.item_list.set_reorder_enabled(False if len(items) > 50 else drag_enabled)
         self._suppress_item_reorder_emit = True
         self.item_list.clear()
-        tab_name_map = tab_name_map or {}
-        file_icon_provider = QFileIconProvider()
-        restore_item: Optional[QListWidgetItem] = None
+        self._pending_render_items = list(items)
+        self._pending_render_index = 0
+        self._pending_render_search_mode = bool(search_mode)
+        self._pending_render_tab_name_map = dict(tab_name_map or {})
+        self._pending_render_restore_id = self._last_selected_item_id
+        self._pending_render_drag_enabled = drag_enabled
+        self._pending_render_file_icon_provider = QFileIconProvider()
+        self._pending_render_started_at = time.perf_counter()
+        self._pending_render_first_batch_logged = False
         try:
-            for item in items:
-                row = present_item(item)
-                line_text = row.primary_text
-                note_text = row.note_text
-                content_text = row.content_text
-                has_note = row.has_note
-                if search_mode:
-                    tab_name = (tab_name_map.get(item.tab_id) or "").strip()
-                    prefix = f"【{tab_name}】" if tab_name else "【未知标签】"
-                    merged_text = f"{prefix}{line_text}" if line_text else prefix
-                    line_text = merged_text
-                    has_note = False
-                    note_text = ""
-                    content_text = merged_text
-                lw_item = QListWidgetItem(line_text)
-                if not search_mode:
-                    lw_item.setFlags(
-                        lw_item.flags()
-                        | Qt.ItemFlag.ItemIsDragEnabled
-                        | Qt.ItemFlag.ItemIsDropEnabled
-                    )
-                lw_item.setToolTip(row.tooltip_text)
-                row_height = 92 if (row.icon_kind == "image" and item.thumb_blob) else 76
-                lw_item.setSizeHint(QSize(0, row_height))
+            self._append_item_batch(50)
+        finally:
+            if self._pending_render_index >= len(self._pending_render_items):
+                self._finish_item_render()
+            else:
+                self._item_render_timer.start(1)
 
-                icon: QIcon | None = None
-                if row.icon_kind == "image" and item.thumb_blob:
-                    pixmap = QPixmap()
-                    if pixmap.loadFromData(item.thumb_blob, "PNG"):
-                        icon = QIcon(pixmap)
-                elif row.icon_kind == "file" and row.file_icon_path:
-                    file_icon = file_icon_provider.icon(QFileInfo(row.file_icon_path))
-                    if not file_icon.isNull():
-                        icon = file_icon
-                elif row.icon_kind == "special":
-                    icon = self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxWarning)
-                elif row.icon_kind == "bundle":
-                    icon = self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogContentsView)
-                if icon is not None:
-                    lw_item.setIcon(icon)
+    def _render_next_item_batch(self) -> None:
+        if not self._pending_render_items:
+            self._finish_item_render()
+            return
+        self._append_item_batch(30)
+        if self._pending_render_index >= len(self._pending_render_items):
+            self._finish_item_render()
+            return
+        self._item_render_timer.start(1)
 
-                lw_item.setData(ITEM_ID_ROLE, item.id)
-                lw_item.setData(ITEM_TYPE_ROLE, item.content_type)
-                lw_item.setData(ITEM_TEXT_ROLE, item.plain_text or item.text)
-                lw_item.setData(ITEM_NOTE_ROLE, item.note or "")
-                lw_item.setData(ITEM_HAS_NOTE_ROLE, has_note)
-                lw_item.setData(ITEM_NOTE_TEXT_ROLE, note_text)
-                lw_item.setData(ITEM_CONTENT_TEXT_ROLE, content_text)
-                lw_item.setData(ITEM_TAB_ID_ROLE, int(item.tab_id))
-                lw_item.setData(ITEM_SECONDARY_TEXT_ROLE, row.secondary_text)
-                lw_item.setData(ITEM_TYPE_LABEL_ROLE, row.type_label)
-                self.item_list.addItem(lw_item)
-                if self._last_selected_item_id is not None and item.id == self._last_selected_item_id:
-                    restore_item = lw_item
-
-            if restore_item is not None:
-                self.item_list.setCurrentItem(restore_item)
+    def _append_item_batch(self, batch_size: int) -> None:
+        end_index = min(
+            len(self._pending_render_items),
+            self._pending_render_index + max(1, int(batch_size)),
+        )
+        while self._pending_render_index < end_index:
+            item = self._pending_render_items[self._pending_render_index]
+            self._pending_render_index += 1
+            lw_item = self._create_list_item(
+                item,
+                search_mode=self._pending_render_search_mode,
+                tab_name_map=self._pending_render_tab_name_map,
+                file_icon_provider=self._pending_render_file_icon_provider,
+            )
+            self.item_list.addItem(lw_item)
+            if (
+                self._pending_render_restore_id is not None
+                and int(item.id) == int(self._pending_render_restore_id)
+            ):
+                self.item_list.setCurrentItem(lw_item)
                 self.item_list.scrollToItem(
-                    restore_item,
+                    lw_item,
                     QAbstractItemView.ScrollHint.PositionAtCenter,
                 )
-        finally:
-            self._suppress_item_reorder_emit = False
+        if not self._pending_render_first_batch_logged:
+            elapsed_ms = (time.perf_counter() - self._pending_render_started_at) * 1000
+            logger.info(
+                "[Perf] item_list first_batch rendered=%s total=%s search_mode=%s ms=%.1f",
+                self._pending_render_index,
+                len(self._pending_render_items),
+                self._pending_render_search_mode,
+                elapsed_ms,
+            )
+            self._pending_render_first_batch_logged = True
 
-    def prepend_item(self, item: ClipItem) -> None:
-        if self._item_list_search_mode:
-            return
-        row = present_item(item)
-        lw_item = QListWidgetItem(row.primary_text)
-        lw_item.setFlags(
-            lw_item.flags()
-            | Qt.ItemFlag.ItemIsDragEnabled
-            | Qt.ItemFlag.ItemIsDropEnabled
+    def _finish_item_render(self) -> None:
+        total = len(self._pending_render_items)
+        elapsed_ms = (
+            (time.perf_counter() - self._pending_render_started_at) * 1000
+            if self._pending_render_started_at
+            else 0.0
         )
+        self._item_render_timer.stop()
+        self._pending_render_items = []
+        self._pending_render_index = 0
+        self._pending_render_file_icon_provider = None
+        self.item_list.set_reorder_enabled(self._pending_render_drag_enabled)
+        self._suppress_item_reorder_emit = False
+        logger.info(
+            "[Perf] item_list render_done total=%s search_mode=%s ms=%.1f",
+            total,
+            self._pending_render_search_mode,
+            elapsed_ms,
+        )
+
+    def _create_list_item(
+        self,
+        item: ClipItem,
+        search_mode: bool = False,
+        tab_name_map: Optional[dict[int, str]] = None,
+        file_icon_provider: Optional[QFileIconProvider] = None,
+    ) -> QListWidgetItem:
+        row = present_item(item)
+        line_text = row.primary_text
+        note_text = row.note_text
+        content_text = row.content_text
+        has_note = row.has_note
+        if search_mode:
+            tab_name = ((tab_name_map or {}).get(item.tab_id) or "").strip()
+            prefix = f"【{tab_name}】" if tab_name else "【未知标签】"
+            merged_text = f"{prefix}{line_text}" if line_text else prefix
+            line_text = merged_text
+            has_note = False
+            note_text = ""
+            content_text = merged_text
+
+        lw_item = QListWidgetItem(line_text)
+        if not search_mode:
+            lw_item.setFlags(
+                lw_item.flags()
+                | Qt.ItemFlag.ItemIsDragEnabled
+                | Qt.ItemFlag.ItemIsDropEnabled
+            )
         lw_item.setToolTip(row.tooltip_text)
         row_height = 92 if (row.icon_kind == "image" and item.thumb_blob) else 76
         lw_item.setSizeHint(QSize(0, row_height))
 
-        icon = None
+        icon: QIcon | None = None
         if row.icon_kind == "image" and item.thumb_blob:
             pixmap = QPixmap()
             if pixmap.loadFromData(item.thumb_blob, "PNG"):
                 icon = QIcon(pixmap)
         elif row.icon_kind == "file" and row.file_icon_path:
-            file_icon = QFileIconProvider().icon(QFileInfo(row.file_icon_path))
+            provider = file_icon_provider or QFileIconProvider()
+            file_icon = provider.icon(QFileInfo(row.file_icon_path))
             if not file_icon.isNull():
                 icon = file_icon
         elif row.icon_kind == "special":
@@ -1893,12 +1944,22 @@ class MainWindow(QMainWindow):
         lw_item.setData(ITEM_TYPE_ROLE, item.content_type)
         lw_item.setData(ITEM_TEXT_ROLE, item.plain_text or item.text)
         lw_item.setData(ITEM_NOTE_ROLE, item.note or "")
-        lw_item.setData(ITEM_HAS_NOTE_ROLE, row.has_note)
-        lw_item.setData(ITEM_NOTE_TEXT_ROLE, row.note_text)
-        lw_item.setData(ITEM_CONTENT_TEXT_ROLE, row.content_text)
+        lw_item.setData(ITEM_HAS_NOTE_ROLE, has_note)
+        lw_item.setData(ITEM_NOTE_TEXT_ROLE, note_text)
+        lw_item.setData(ITEM_CONTENT_TEXT_ROLE, content_text)
         lw_item.setData(ITEM_TAB_ID_ROLE, int(item.tab_id))
         lw_item.setData(ITEM_SECONDARY_TEXT_ROLE, row.secondary_text)
-        lw_item.setData(ITEM_TYPE_LABEL_ROLE, row.type_label)
+        lw_item.setData(
+            ITEM_TYPE_LABEL_ROLE,
+            f"置顶 · {row.type_label}" if item.pinned else row.type_label,
+        )
+        lw_item.setData(ITEM_PINNED_ROLE, bool(item.pinned))
+        return lw_item
+
+    def prepend_item(self, item: ClipItem) -> None:
+        if self._item_list_search_mode:
+            return
+        lw_item = self._create_list_item(item, search_mode=False)
         self.item_list.insertItem(0, lw_item)
 
     def _on_search_input_changed(self, _text: str) -> None:
@@ -2601,6 +2662,8 @@ class MainWindow(QMainWindow):
                 return
 
             item_id = int(item.data(ITEM_ID_ROLE))
+            is_pinned = bool(item.data(ITEM_PINNED_ROLE))
+            pin_action = menu.addAction("取消置顶" if is_pinned else "置顶条目")
             edit_action = menu.addAction("编辑条目")
             edit_note_action = menu.addAction("编辑备注")
             move_menu = menu.addMenu("移动到")
@@ -2615,7 +2678,9 @@ class MainWindow(QMainWindow):
             clear_action = menu.addAction("清空列表")
             with self._with_auto_hide_suspended():
                 selected = menu.exec(self.item_list.mapToGlobal(pos))
-            if selected == edit_action:
+            if selected == pin_action:
+                self.item_pin_change_requested.emit(item_id, not is_pinned)
+            elif selected == edit_action:
                 self.start_inline_edit_requested.emit(item_id)
             elif edit_note_action is not None and selected == edit_note_action:
                 current_note = str(item.data(ITEM_NOTE_ROLE) or "")

@@ -686,7 +686,7 @@ class ClipRepository:
                     (SELECT COUNT(*) FROM item_mime_parts mp WHERE mp.item_id = i.id) AS mime_part_count
                 FROM items i
                 WHERE i.tab_id = ?
-                ORDER BY i.sort_order ASC, i.created_at DESC, i.id DESC
+                ORDER BY i.pinned DESC, i.sort_order ASC, i.created_at DESC, i.id DESC
                 """,
                 (tab_id,),
             ).fetchall()
@@ -718,7 +718,7 @@ class ClipRepository:
                     OR COALESCE(i.note, '') LIKE ? ESCAPE '\\'
                     OR COALESCE(i.file_paths_json, '') LIKE ? ESCAPE '\\'
                     OR COALESCE(i.mime_formats_json, '') LIKE ? ESCAPE '\\'
-                ORDER BY i.created_at DESC, i.id DESC
+                ORDER BY i.pinned DESC, i.created_at DESC, i.id DESC
                 LIMIT ?
                 """,
                 (
@@ -733,6 +733,18 @@ class ClipRepository:
                 ),
             ).fetchall()
         return [self._to_item(row) for row in rows]
+
+    def set_item_pinned(self, item_id: int, pinned: bool) -> ClipItem:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM items WHERE id = ?", (int(item_id),)).fetchone()
+            if row is None:
+                raise ValueError("未找到条目。")
+            conn.execute(
+                "UPDATE items SET pinned = ? WHERE id = ?",
+                (1 if bool(pinned) else 0, int(item_id)),
+            )
+            updated = conn.execute("SELECT * FROM items WHERE id = ?", (int(item_id),)).fetchone()
+            return self._to_item(updated)
 
     def get_item(self, item_id: int) -> Optional[ClipItem]:
         with self._connect() as conn:
@@ -1474,7 +1486,6 @@ class ClipRepository:
                         html_text = ?,
                         file_paths_json = '[]',
                         mime_formats_json = ?,
-                        pinned = 0,
                         source_app = NULL,
                         thumb_blob = ?
                     WHERE id = ?
@@ -1527,7 +1538,6 @@ class ClipRepository:
                         html_text = '',
                         file_paths_json = '[]',
                         mime_formats_json = '[]',
-                        pinned = 0,
                         source_app = NULL,
                         thumb_blob = NULL
                     WHERE id = ?

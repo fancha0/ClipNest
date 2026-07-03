@@ -3,6 +3,7 @@
 import logging
 import re
 import sys
+import time
 from typing import Optional
 
 from PySide6.QtCore import QTimer, Qt
@@ -42,6 +43,7 @@ class AppController:
         self._auto_hide_on_paste = AUTO_HIDE_ON_PASTE
         self._capture_tab_id: Optional[int] = None
         self._search_query: str = ""
+        self._items_cache: dict[int, list] = {}
         self._rich_segments_cache: dict[int, list[dict]] = {}
         self._rich_prewarm_queue: list[int] = []
         self._rich_prewarm_ids: set[int] = set()
@@ -125,6 +127,7 @@ class AppController:
         self._window.edit_item_image_requested.connect(self._on_edit_item_image)
         self._window.edit_bundle_requested.connect(self._on_edit_bundle)
         self._window.edit_note_requested.connect(self._on_edit_note)
+        self._window.item_pin_change_requested.connect(self._on_item_pin_change_requested)
         self._window.delete_item_requested.connect(self._on_delete_item)
         self._window.clear_items_requested.connect(self._on_clear_items)
         self._window.move_items_requested.connect(self._on_move_items_to_tab)
@@ -319,12 +322,15 @@ class AppController:
         try:
             self._repository.reorder_items(tab_id, item_ids)
         except ValueError:
+            self._invalidate_items_cache(current_tab_id)
             self._refresh_items(current_tab_id)
             return
         except Exception as exc:
             self._window.show_error(f"保存条目顺序失败：{exc}")
+            self._invalidate_items_cache(current_tab_id)
             self._refresh_items(current_tab_id)
             return
+        self._invalidate_items_cache(current_tab_id)
         self._refresh_items(current_tab_id)
 
     def _on_create_tab(self, name: str) -> None:
@@ -333,6 +339,7 @@ class AppController:
         except Exception as exc:
             self._window.show_error(f"创建标签页失败：{exc}")
             return
+        self._invalidate_items_cache()
         self._refresh_tabs(active_tab_id=tab.id)
 
     def _on_rename_tab(self, tab_id: int, name: str) -> None:
@@ -362,6 +369,7 @@ class AppController:
         except Exception as exc:
             self._window.show_error(f"删除标签页失败：{exc}")
             return
+        self._invalidate_items_cache(tab_id)
 
         remaining_tabs = self._repository.list_tabs()
         next_tab_id = remaining_tabs[0].id if remaining_tabs else None
@@ -378,6 +386,7 @@ class AppController:
         if tab_id is None:
             return
         self._repository.upsert_text_item(tab_id, text)
+        self._invalidate_items_cache(tab_id)
         self._refresh_items(tab_id)
 
     def _on_add_bundle_item(self, text: str, images: list[dict], note: str) -> None:
@@ -393,6 +402,7 @@ class AppController:
             self._window.show_error("创建失败：请至少添加一张图片。")
             return
         self._invalidate_rich_cache(item.id)
+        self._invalidate_items_cache(tab_id)
         self._refresh_items(tab_id)
 
     def _on_add_mixed_item(self, segments: object, note: str) -> None:
@@ -410,6 +420,7 @@ class AppController:
         if any(isinstance(seg, dict) and str(seg.get("type") or "").lower() == "image" for seg in segments):
             self._rich_segments_cache[int(item.id)] = list(segments)
             self._paste_service.prepare_mixed_segments(list(segments))
+        self._invalidate_items_cache(tab_id)
         self._refresh_items(tab_id)
 
     def _on_edit_item(self, item_id: int, text: str, note: str) -> None:
@@ -421,6 +432,7 @@ class AppController:
         self._invalidate_rich_cache(item_id)
         tab_id = self._window.current_tab_id()
         if tab_id is not None:
+            self._invalidate_items_cache(tab_id)
             self._refresh_items(tab_id)
 
     def _on_edit_item_image(
@@ -447,6 +459,7 @@ class AppController:
         self._invalidate_rich_cache(item_id)
         tab_id = self._window.current_tab_id()
         if tab_id is not None:
+            self._invalidate_items_cache(tab_id)
             self._refresh_items(tab_id)
 
     def _on_edit_bundle(self, item_id: int) -> None:
@@ -479,6 +492,7 @@ class AppController:
         self._invalidate_rich_cache(item_id)
         current_tab_id = self._window.current_tab_id()
         if current_tab_id is not None:
+            self._invalidate_items_cache(current_tab_id)
             self._refresh_items(current_tab_id)
 
     def _on_start_inline_edit(self, item_id: int) -> None:
@@ -505,6 +519,7 @@ class AppController:
             self._invalidate_rich_cache(item_id)
         tab_id = self._window.current_tab_id()
         if tab_id is not None:
+            self._invalidate_items_cache(tab_id)
             self._refresh_items(tab_id)
         self._window.hide_inline_editor()
 
@@ -568,6 +583,7 @@ class AppController:
         self._invalidate_rich_cache(item_id)
         tab_id = self._window.current_tab_id()
         if tab_id is not None:
+            self._invalidate_items_cache(tab_id)
             self._refresh_items(tab_id)
 
     def _on_edit_note(self, item_id: int, note: str) -> None:
@@ -578,7 +594,19 @@ class AppController:
             return
         tab_id = self._window.current_tab_id()
         if tab_id is not None:
+            self._invalidate_items_cache(tab_id)
             self._refresh_items(tab_id)
+
+    def _on_item_pin_change_requested(self, item_id: int, pinned: bool) -> None:
+        try:
+            item = self._repository.set_item_pinned(item_id, pinned)
+        except Exception as exc:
+            self._window.show_error(f"置顶失败：{exc}")
+            return
+        self._invalidate_items_cache(item.tab_id)
+        current_tab_id = self._window.current_tab_id()
+        if current_tab_id is not None:
+            self._refresh_items(current_tab_id)
 
     def _on_clear_items(self, tab_id: int) -> None:
         ok = self._window.confirm("清空列表", "确认清空当前标签页所有条目吗？")
@@ -586,6 +614,7 @@ class AppController:
             return
         self._repository.clear_items(tab_id)
         self._clear_rich_prewarm()
+        self._invalidate_items_cache(tab_id)
         self._refresh_items(tab_id)
 
     def _on_move_items_to_tab(self, item_ids: list[int], target_tab_id: int) -> None:
@@ -606,6 +635,7 @@ class AppController:
             return
         for item_id in item_ids:
             self._invalidate_rich_cache(int(item_id))
+        self._invalidate_items_cache()
 
         if result.moved_count == 0 and result.already_in_target_count > 0:
             self._window.show_info("已在当前标签页")
@@ -726,9 +756,14 @@ class AppController:
             return
         current_tab_id = self._window.current_tab_id()
         if self._search_query:
+            self._invalidate_items_cache(tab_id)
             self._refresh_items(current_tab_id or tab_id)
         elif current_tab_id == tab_id:
+            if int(tab_id) in self._items_cache:
+                self._items_cache[int(tab_id)].insert(0, inserted)
             self._window.prepend_item(inserted)
+        else:
+            self._invalidate_items_cache(tab_id)
 
     def _on_hotkey_change_requested(self, raw_hotkey: str) -> None:
         normalized, error = HotkeyService.normalize_hotkey(raw_hotkey)
@@ -836,6 +871,7 @@ class AppController:
         except Exception as exc:
             self._window.show_error(f"导入失败：{exc}")
             return
+        self._invalidate_items_cache()
         active_tab_id = self._window.current_tab_id()
         self._refresh_tabs(active_tab_id=active_tab_id)
         self._window.show_info(
@@ -868,28 +904,56 @@ class AppController:
         )
         try:
             if self._search_query:
+                started = time.perf_counter()
                 items = self._repository.search_items_all_tabs(self._search_query, limit=1000)
                 tabs = self._repository.list_tabs()
+                load_ms = (time.perf_counter() - started) * 1000
                 tab_name_map = {tab.id: tab.name for tab in tabs}
                 self._window.set_items(items, search_mode=True, tab_name_map=tab_name_map)
                 self._schedule_rich_prewarm(items)
-                logger.debug("[UI] refresh_items done search_mode=True items=%s", len(items))
+                logger.info(
+                    "[Perf] refresh_items search items=%s load_ms=%.1f cache_hit=False",
+                    len(items),
+                    load_ms,
+                )
                 return
             if tab_id is None:
                 self._window.set_items([])
                 self._schedule_rich_prewarm([])
                 logger.debug("[UI] refresh_items done tab_id=None items=0")
                 return
-            items = self._repository.list_items(tab_id)
+            cached_items = self._items_cache.get(int(tab_id))
+            if cached_items is None:
+                started = time.perf_counter()
+                items = self._repository.list_items(tab_id)
+                load_ms = (time.perf_counter() - started) * 1000
+                self._items_cache[int(tab_id)] = list(items)
+                cache_hit = False
+            else:
+                items = list(cached_items)
+                load_ms = 0.0
+                cache_hit = True
             self._window.set_items(items, search_mode=False, tab_name_map=None)
             self._schedule_rich_prewarm(items)
-            logger.debug("[UI] refresh_items done search_mode=False items=%s", len(items))
+            logger.info(
+                "[Perf] refresh_items tab_id=%s items=%s cache_hit=%s load_ms=%.1f",
+                tab_id,
+                len(items),
+                cache_hit,
+                load_ms,
+            )
         except Exception:
             logger.exception(
                 "[UI] refresh_items failed tab_id=%s search_mode=%s",
                 tab_id,
                 bool(self._search_query),
             )
+
+    def _invalidate_items_cache(self, tab_id: Optional[int] = None) -> None:
+        if tab_id is None:
+            self._items_cache.clear()
+            return
+        self._items_cache.pop(int(tab_id), None)
 
     def _schedule_rich_prewarm(self, items: list) -> None:
         visible_rich_ids = [

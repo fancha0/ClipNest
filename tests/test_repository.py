@@ -178,6 +178,85 @@ class ClipRepositoryTests(unittest.TestCase):
         items = repo.list_items(tab_id)
         self.assertEqual(items[0].id, newest.id)
 
+    def test_pinned_item_stays_above_new_regular_item(self) -> None:
+        repo = ClipRepository(self.db_path, max_items_per_tab=500)
+        tab_id = _tab_ids(repo)[0]
+        pinned = repo.upsert_text_item(tab_id, "pinned")
+        regular = repo.upsert_text_item(tab_id, "regular")
+        self.assertIsNotNone(pinned)
+        self.assertIsNotNone(regular)
+        assert pinned is not None and regular is not None
+
+        repo.set_item_pinned(pinned.id, True)
+        newest = repo.upsert_text_item(tab_id, "new regular")
+        self.assertIsNotNone(newest)
+
+        items = repo.list_items(tab_id)
+        self.assertEqual(items[0].id, pinned.id)
+        self.assertTrue(items[0].pinned)
+        self.assertEqual(items[1].id, newest.id)
+
+    def test_unpin_item_returns_to_regular_sorting(self) -> None:
+        repo = ClipRepository(self.db_path, max_items_per_tab=500)
+        tab_id = _tab_ids(repo)[0]
+        older = repo.upsert_text_item(tab_id, "older")
+        pinned = repo.upsert_text_item(tab_id, "pinned")
+        newer = repo.upsert_text_item(tab_id, "newer")
+        self.assertIsNotNone(older)
+        self.assertIsNotNone(pinned)
+        self.assertIsNotNone(newer)
+        assert older is not None and pinned is not None and newer is not None
+
+        repo.set_item_pinned(pinned.id, True)
+        self.assertEqual(repo.list_items(tab_id)[0].id, pinned.id)
+        repo.set_item_pinned(pinned.id, False)
+
+        items = repo.list_items(tab_id)
+        self.assertFalse(next(item for item in items if item.id == pinned.id).pinned)
+        self.assertEqual(items[0].id, newer.id)
+
+    def test_multiple_pinned_items_keep_sort_order_before_regular_items(self) -> None:
+        repo = ClipRepository(self.db_path, max_items_per_tab=500)
+        tab_id = _tab_ids(repo)[0]
+        first = repo.upsert_text_item(tab_id, "first")
+        second = repo.upsert_text_item(tab_id, "second")
+        third = repo.upsert_text_item(tab_id, "third")
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        self.assertIsNotNone(third)
+        assert first is not None and second is not None and third is not None
+
+        repo.set_item_pinned(first.id, True)
+        repo.set_item_pinned(second.id, True)
+        repo.reorder_items(tab_id, [second.id, third.id, first.id])
+
+        items = repo.list_items(tab_id)
+        self.assertEqual([item.id for item in items], [second.id, first.id, third.id])
+        self.assertEqual([item.pinned for item in items], [True, True, False])
+
+    def test_editing_mixed_item_preserves_pinned_state(self) -> None:
+        repo = ClipRepository(self.db_path, max_items_per_tab=500)
+        tab_id = _tab_ids(repo)[0]
+        item = repo.create_mixed_item(
+            tab_id,
+            [
+                {"type": "text", "content": "old"},
+                {"type": "image", "image_blob": b"img", "mime_type": "image/png", "width": 1, "height": 1},
+            ],
+        )
+        repo.set_item_pinned(item.id, True)
+
+        edited = repo.update_item_mixed(
+            item.id,
+            [
+                {"type": "text", "content": "new"},
+                {"type": "image", "image_blob": b"img2", "mime_type": "image/png", "width": 1, "height": 1},
+            ],
+        )
+
+        self.assertTrue(edited.pinned)
+        self.assertTrue(repo.get_item(item.id).pinned)
+
     def test_move_items_to_other_tab_persists(self) -> None:
         repo = ClipRepository(self.db_path, max_items_per_tab=500)
         tab_a, tab_b = _tab_ids(repo)[:2]
