@@ -904,6 +904,7 @@ class BundleItemDialog(QDialog):
         self._note = (initial_note or "").strip()
         self._result_text = (initial_text or "").strip()
         self._result_images: list[dict[str, Any]] = list(initial_images or [])
+        self._result_segments: list[dict[str, Any]] = []
         self._build_ui(initial_text)
         self._refresh_image_list()
 
@@ -933,6 +934,7 @@ class BundleItemDialog(QDialog):
         return
 
     def _on_accept(self) -> None:
+        self._result_segments = self.content_edit.segments()
         self._result_text, self._result_images = self.content_edit.content_parts()
         text = self._result_text
         has_images = len(self._result_images) > 0
@@ -949,6 +951,9 @@ class BundleItemDialog(QDialog):
 
     def result_images(self) -> list[dict[str, Any]]:
         return list(self._result_images)
+
+    def result_segments(self) -> list[dict[str, Any]]:
+        return list(self._result_segments)
 
     def result_note(self) -> str:
         return self._note
@@ -1447,6 +1452,7 @@ class MainWindow(QMainWindow):
     delete_tab_requested = Signal(int)
     add_item_requested = Signal(str)
     add_bundle_item_requested = Signal(str, object, str)
+    add_mixed_item_requested = Signal(object, str)
     edit_item_requested = Signal(int, str, str)
     edit_item_image_requested = Signal(int, object, str, int, int, str)
     edit_bundle_requested = Signal(int)
@@ -2367,7 +2373,7 @@ class MainWindow(QMainWindow):
         images = dialog.result_images()
         note = dialog.result_note()
         if images:
-            self.add_bundle_item_requested.emit(text, images, note)
+            self.add_mixed_item_requested.emit(dialog.result_segments(), note)
         elif text.strip():
             self.add_item_requested.emit(text)
 

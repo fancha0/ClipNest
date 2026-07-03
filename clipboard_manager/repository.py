@@ -1342,6 +1342,84 @@ class ClipRepository:
             return []
         return self._deserialize_mixed_segments(str(row["text"] or ""))
 
+    def create_mixed_item(
+        self,
+        tab_id: int,
+        segments: list[dict[str, Any]],
+        note: str = "",
+    ) -> ClipItem:
+        prepared = self._normalize_mixed_segments(segments)
+        if not prepared:
+            raise ValueError("请至少输入文字或添加图片。")
+
+        plain_text = self._mixed_segments_to_plain_text(prepared)
+        has_images = any(seg["type"] == "image" for seg in prepared)
+        if not has_images:
+            return self.upsert_text_item(tab_id, plain_text)
+
+        serialized = self._serialize_mixed_segments(prepared)
+        html_text = self._mixed_segments_to_html(prepared)
+        display_text = self._mixed_segments_to_display_text(prepared, plain_text)
+        content_hash = "rich:" + hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+        thumb_blob = self._first_image_thumb_blob(prepared)
+        now = self._now()
+
+        with self._connect() as conn:
+            existing_row = conn.execute(
+                """
+                SELECT
+                    i.*,
+                    (SELECT COUNT(*) FROM item_images bi WHERE bi.item_id = i.id) AS image_count,
+                    (SELECT COUNT(*) FROM item_mime_parts mp WHERE mp.item_id = i.id) AS mime_part_count
+                FROM items i
+                WHERE i.tab_id = ? AND i.content_type = 'rich' AND i.content_hash = ?
+                """,
+                (tab_id, content_hash),
+            ).fetchone()
+            if existing_row:
+                return self._to_item(existing_row)
+
+            sort_order = self._next_item_sort_order(conn, tab_id)
+            cursor = conn.execute(
+                """
+                INSERT INTO items(
+                    tab_id, sort_order, content_type, text, note, image_blob, mime_type, width, height,
+                    content_hash, created_at, last_used_at, use_count, display_text, plain_text,
+                    html_text, file_paths_json, mime_formats_json, pinned, source_app, thumb_blob
+                )
+                VALUES (?, ?, 'rich', ?, ?, NULL, 'text/html', NULL, NULL,
+                        ?, ?, ?, 0, ?, ?, ?, '[]', ?, 0, NULL, ?)
+                """,
+                (
+                    tab_id,
+                    sort_order,
+                    serialized,
+                    (note or "").strip(),
+                    content_hash,
+                    now,
+                    now,
+                    display_text,
+                    plain_text,
+                    html_text,
+                    json.dumps(["text/html", "text/plain"], ensure_ascii=False),
+                    thumb_blob,
+                ),
+            )
+            item_id = int(cursor.lastrowid)
+            self._enforce_capacity(conn, tab_id)
+            row = conn.execute(
+                """
+                SELECT
+                    i.*,
+                    (SELECT COUNT(*) FROM item_images bi WHERE bi.item_id = i.id) AS image_count,
+                    (SELECT COUNT(*) FROM item_mime_parts mp WHERE mp.item_id = i.id) AS mime_part_count
+                FROM items i
+                WHERE i.id = ?
+                """,
+                (item_id,),
+            ).fetchone()
+            return self._to_item(row)
+
     def update_item_mixed(
         self,
         item_id: int,

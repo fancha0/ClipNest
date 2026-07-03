@@ -113,6 +113,7 @@ class AppController:
         self._window.delete_tab_requested.connect(self._on_delete_tab)
         self._window.add_item_requested.connect(self._on_add_item)
         self._window.add_bundle_item_requested.connect(self._on_add_bundle_item)
+        self._window.add_mixed_item_requested.connect(self._on_add_mixed_item)
         self._window.edit_item_requested.connect(self._on_edit_item)
         self._window.edit_item_image_requested.connect(self._on_edit_item_image)
         self._window.edit_bundle_requested.connect(self._on_edit_bundle)
@@ -385,6 +386,20 @@ class AppController:
             return
         self._refresh_items(tab_id)
 
+    def _on_add_mixed_item(self, segments: object, note: str) -> None:
+        tab_id = self._window.current_tab_id()
+        if tab_id is None:
+            return
+        if not isinstance(segments, list):
+            self._window.show_error("创建失败：图文内容格式错误。")
+            return
+        try:
+            self._repository.create_mixed_item(tab_id, segments, note=note)
+        except Exception as exc:
+            self._window.show_error(f"创建图文条目失败：{exc}")
+            return
+        self._refresh_items(tab_id)
+
     def _on_edit_item(self, item_id: int, text: str, note: str) -> None:
         try:
             self._repository.update_item_text(item_id, text, note=note)
@@ -625,12 +640,20 @@ class AppController:
                     hide_window=hide_window_cb,
                 )
             elif item_type == "rich":
-                pasted = self._paste_service.paste_html(
-                    str(payload.get("html_text") or ""),
-                    str(payload.get("plain_text") or ""),
-                    self._pending_focus_target,
-                    hide_window=hide_window_cb,
-                )
+                segments = self._repository.get_item_rich_segments(item_id)
+                if segments:
+                    pasted = self._paste_service.paste_mixed_segments(
+                        segments,
+                        self._pending_focus_target,
+                        hide_window=hide_window_cb,
+                    )
+                else:
+                    pasted = self._paste_service.paste_html(
+                        str(payload.get("html_text") or ""),
+                        str(payload.get("plain_text") or ""),
+                        self._pending_focus_target,
+                        hide_window=hide_window_cb,
+                    )
             elif item_type in {"special", "raw_snapshot"}:
                 parts = list(payload.get("raw_parts") or [])
                 if not parts:

@@ -413,6 +413,23 @@ class ClipRepositoryTests(unittest.TestCase):
         self.assertEqual(loaded_item.text, "new-text")
         self.assertEqual(loaded_images[0].image_blob, b"new-img")
 
+    def test_create_mixed_item_preserves_segment_order(self) -> None:
+        repo = ClipRepository(self.db_path, max_items_per_tab=500)
+        tab_id = _tab_ids(repo)[0]
+        item = repo.create_mixed_item(
+            tab_id,
+            [
+                {"type": "image", "image_blob": b"img-first", "mime_type": "image/png", "width": 8, "height": 8},
+                {"type": "text", "content": "text-after"},
+            ],
+        )
+
+        self.assertEqual(item.content_type, "rich")
+        segments = repo.get_item_rich_segments(item.id)
+        self.assertEqual([seg["type"] for seg in segments], ["image", "text"])
+        self.assertEqual(segments[0]["image_blob"], b"img-first")
+        self.assertEqual(segments[1]["content"], "text-after")
+
     def test_capture_tab_setting_initialized(self) -> None:
         repo = ClipRepository(self.db_path, max_items_per_tab=500)
         first_tab_id = _tab_ids(repo)[0]

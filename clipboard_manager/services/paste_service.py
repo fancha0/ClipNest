@@ -164,19 +164,49 @@ class PasteService:
                 return
             self._clipboard_service.suspend_once_for_image(png_bytes)
             self._clipboard.setImage(image)
-            self._send_paste_shortcut()
+            QTimer.singleShot(120, self._send_paste_shortcut)
 
         if target:
             def flow() -> None:
                 restored = self._focus_service.restore_target(target)
                 first_delay = 150 if restored else 20
                 QTimer.singleShot(first_delay, self._send_paste_shortcut)
-                QTimer.singleShot(first_delay + 180, paste_image_stage)
+                QTimer.singleShot(first_delay + 220, paste_image_stage)
 
             QTimer.singleShot(80, flow)
         else:
             QTimer.singleShot(80, self._send_paste_shortcut)
-            QTimer.singleShot(260, paste_image_stage)
+            QTimer.singleShot(300, paste_image_stage)
+        return True
+
+    def paste_mixed_segments(
+        self,
+        segments: list[dict],
+        target: Optional[FocusTarget],
+        hide_window: Optional[Callable[[], None]] = None,
+    ) -> bool:
+        stages = self._build_mixed_paste_stages(segments)
+        if len(stages) == 0:
+            return False
+
+        if len(stages) == 1:
+            stage_type, payload = stages[0]
+            if stage_type == "text":
+                return self.paste_text(str(payload), target, hide_window)
+            return self.paste_image(bytes(payload), target, hide_window)
+
+        if hide_window:
+            hide_window()
+
+        if target:
+            def flow() -> None:
+                restored = self._focus_service.restore_target(target)
+                delay = 150 if restored else 20
+                QTimer.singleShot(delay, lambda: self._run_next_mixed_stage(stages, 0))
+
+            QTimer.singleShot(80, flow)
+        else:
+            QTimer.singleShot(80, lambda: self._run_next_mixed_stage(stages, 0))
         return True
 
     def paste_raw_snapshot(
@@ -228,6 +258,85 @@ class PasteService:
         except Exception:
             # Swallow errors to avoid breaking UI flow when OS-level permissions are missing.
             return
+
+    def _run_next_mixed_stage(self, stages: list[tuple[str, object]], index: int) -> None:
+        if index >= len(stages):
+            return
+        stage_type, payload = stages[index]
+        self._paste_mixed_stage(
+            stage_type,
+            payload,
+            after_paste=lambda: self._run_next_mixed_stage(stages, index + 1),
+        )
+
+    def _paste_mixed_stage(
+        self,
+        stage_type: str,
+        payload: object,
+        after_paste: Optional[Callable[[], None]] = None,
+    ) -> None:
+        if stage_type == "text":
+            text = str(payload)
+            if text == "":
+                if after_paste:
+                    QTimer.singleShot(0, after_paste)
+                return
+            self._clipboard_service.suspend_once_for_text(text)
+            self._clipboard.setText(text)
+            QTimer.singleShot(60, self._send_paste_shortcut)
+            if after_paste:
+                QTimer.singleShot(60 + 220, after_paste)
+            return
+
+        image_bytes = bytes(payload)
+        if not image_bytes:
+            if after_paste:
+                QTimer.singleShot(0, after_paste)
+            return
+        image = QImage()
+        if not image.loadFromData(image_bytes, "PNG"):
+            if after_paste:
+                QTimer.singleShot(0, after_paste)
+            return
+        self._clipboard_service.suspend_once_for_image(image_bytes)
+        self._clipboard.setImage(image)
+        QTimer.singleShot(120, self._send_paste_shortcut)
+        if after_paste:
+            QTimer.singleShot(120 + 280, after_paste)
+
+    def _build_mixed_paste_stages(self, segments: list[dict]) -> list[tuple[str, object]]:
+        stages: list[tuple[str, object]] = []
+        image_group: list[bytes] = []
+
+        def flush_images() -> None:
+            if not image_group:
+                return
+            composed = self._compose_images_vertically(image_group)
+            if composed is not None:
+                _image, png_bytes = composed
+                stages.append(("image", png_bytes))
+            image_group.clear()
+
+        for segment in segments or []:
+            if not isinstance(segment, dict):
+                continue
+            seg_type = str(segment.get("type") or "").strip().lower()
+            if seg_type == "text":
+                flush_images()
+                text = str(segment.get("content") or "")
+                if text:
+                    if stages and stages[-1][0] == "text":
+                        stages[-1] = ("text", str(stages[-1][1]) + text)
+                    else:
+                        stages.append(("text", text))
+                continue
+            if seg_type == "image":
+                blob = segment.get("image_blob")
+                if isinstance(blob, (bytes, bytearray)) and len(blob) > 0:
+                    image_group.append(bytes(blob))
+
+        flush_images()
+        return stages
 
     @staticmethod
     def _compose_images_vertically(image_bytes_list: list[bytes]) -> tuple[QImage, bytes] | None:
