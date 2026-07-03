@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import html as html_lib
+import hashlib
+import tempfile
 import sys
+import uuid
+from pathlib import Path
 from typing import Callable, Optional
 
 from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QTimer, Qt, QUrl
@@ -23,6 +28,7 @@ class PasteService:
         self._clipboard_service = clipboard_service
         self._focus_service = focus_service
         self._keyboard = Controller()
+        self._temp_image_cache: dict[str, Path] = {}
 
     def paste_text(
         self,
@@ -147,10 +153,16 @@ class PasteService:
             return False
         _composed_image, png_bytes = composed
 
-        # Compatibility-first path: text paste first, then image paste.
         if clean_text == "":
             return self.paste_image(png_bytes, target, hide_window=hide_window)
 
+        rich_segments: list[dict] = [{"type": "text", "content": text}]
+        for image_bytes in image_bytes_list:
+            rich_segments.append({"type": "image", "image_blob": image_bytes})
+        if self.paste_mixed_segments(rich_segments, target, hide_window=hide_window):
+            return True
+
+        # Compatibility fallback: text paste first, then image paste.
         text_payload = clean_text if clean_text.endswith("\n") else f"{clean_text}\n"
         self._clipboard_service.suspend_once_for_text(text_payload)
         self._clipboard.setText(text_payload)
@@ -185,18 +197,33 @@ class PasteService:
         target: Optional[FocusTarget],
         hide_window: Optional[Callable[[], None]] = None,
     ) -> bool:
+        if hide_window:
+            hide_window()
+        QTimer.singleShot(30, lambda: self._paste_mixed_segments_after_hide(segments, target))
+        return True
+
+    def prepare_mixed_segments(self, segments: list[dict]) -> None:
+        self._build_mixed_rich_payload(segments)
+
+    def _paste_mixed_segments_after_hide(
+        self,
+        segments: list[dict],
+        target: Optional[FocusTarget],
+    ) -> None:
         stages = self._build_mixed_paste_stages(segments)
         if len(stages) == 0:
-            return False
+            return
 
         if len(stages) == 1:
             stage_type, payload = stages[0]
             if stage_type == "text":
-                return self.paste_text(str(payload), target, hide_window)
-            return self.paste_image(bytes(payload), target, hide_window)
+                self.paste_text(str(payload), target)
+                return
+            self.paste_image(bytes(payload), target)
+            return
 
-        if hide_window:
-            hide_window()
+        if self._paste_mixed_as_rich_html(segments, target):
+            return
 
         if target:
             def flow() -> None:
@@ -207,7 +234,6 @@ class PasteService:
             QTimer.singleShot(80, flow)
         else:
             QTimer.singleShot(80, lambda: self._run_next_mixed_stage(stages, 0))
-        return True
 
     def paste_raw_snapshot(
         self,
@@ -258,6 +284,96 @@ class PasteService:
         except Exception:
             # Swallow errors to avoid breaking UI flow when OS-level permissions are missing.
             return
+
+    def _paste_mixed_as_rich_html(
+        self,
+        segments: list[dict],
+        target: Optional[FocusTarget],
+        hide_window: Optional[Callable[[], None]] = None,
+    ) -> bool:
+        rich = self._build_mixed_rich_payload(segments)
+        if rich is None:
+            return False
+        html_text, plain_text = rich
+
+        mime = QMimeData()
+        mime.setHtml(html_text)
+        if plain_text.strip():
+            mime.setText(plain_text)
+
+        self._clipboard_service.suspend_once_for_snapshot()
+        self._clipboard.setMimeData(mime)
+
+        if hide_window:
+            hide_window()
+
+        if target:
+            QTimer.singleShot(80, lambda: self._restore_and_paste(target))
+        else:
+            QTimer.singleShot(80, self._send_paste_shortcut)
+        return True
+
+    def _build_mixed_rich_payload(self, segments: list[dict]) -> tuple[str, str] | None:
+        html_parts: list[str] = []
+        plain_parts: list[str] = []
+        has_image = False
+        has_text = False
+
+        for segment in segments or []:
+            if not isinstance(segment, dict):
+                continue
+            seg_type = str(segment.get("type") or "").strip().lower()
+            if seg_type == "text":
+                text = str(segment.get("content") or "")
+                if text == "":
+                    continue
+                has_text = True
+                plain_parts.append(text)
+                html_parts.append(html_lib.escape(text).replace("\n", "<br/>"))
+                continue
+            if seg_type == "image":
+                blob = segment.get("image_blob")
+                if not isinstance(blob, (bytes, bytearray)) or len(blob) == 0:
+                    continue
+                image_path = self._write_temp_image(bytes(blob))
+                if image_path is None:
+                    continue
+                image_url = QUrl.fromLocalFile(str(image_path)).toString()
+                escaped_url = html_lib.escape(image_url, quote=True)
+                has_image = True
+                html_parts.append(
+                    f'<img src="{escaped_url}" style="max-width:100%;height:auto;"/>'
+                )
+
+        if not has_image:
+            return None
+        if not has_text and not html_parts:
+            return None
+        body = "".join(html_parts)
+        return f"<html><body>{body}</body></html>", "".join(plain_parts)
+
+    def _write_temp_image(self, image_bytes: bytes) -> Path | None:
+        image_hash = hashlib.sha256(image_bytes).hexdigest()
+        cached_path = self._temp_image_cache.get(image_hash)
+        if cached_path is not None and cached_path.exists():
+            return cached_path
+
+        image = QImage()
+        if not image.loadFromData(image_bytes):
+            return None
+        temp_dir = Path(tempfile.gettempdir()) / "ClipNestTemp"
+        try:
+            temp_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            return None
+        image_path = temp_dir / f"clipnest_{uuid.uuid4().hex}.png"
+        try:
+            if image.save(str(image_path), "PNG"):
+                self._temp_image_cache[image_hash] = image_path
+                return image_path
+        except Exception:
+            return None
+        return None
 
     def _run_next_mixed_stage(self, stages: list[tuple[str, object]], index: int) -> None:
         if index >= len(stages):

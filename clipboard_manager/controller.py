@@ -5,7 +5,7 @@ import re
 import sys
 from typing import Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QTimer, Qt
 
 from .config import AUTO_HIDE_ON_PASTE, default_hotkey
 from .models import ParsedClipboardItem
@@ -42,6 +42,13 @@ class AppController:
         self._auto_hide_on_paste = AUTO_HIDE_ON_PASTE
         self._capture_tab_id: Optional[int] = None
         self._search_query: str = ""
+        self._rich_segments_cache: dict[int, list[dict]] = {}
+        self._rich_prewarm_queue: list[int] = []
+        self._rich_prewarm_ids: set[int] = set()
+        self._rich_prewarm_timer = QTimer()
+        self._rich_prewarm_timer.setSingleShot(True)
+        self._rich_prewarm_timer.setInterval(80)
+        self._rich_prewarm_timer.timeout.connect(self._prewarm_next_rich_batch)
         self._connect_signals()
 
     def initialize(self) -> None:
@@ -246,6 +253,7 @@ class AppController:
     def _on_tab_selected(self, tab_id: int) -> None:
         self._repository.set_setting("active_tab_id", str(tab_id))
         self._window.hide_inline_editor()
+        self._clear_rich_prewarm()
         self._refresh_items(tab_id)
 
     def _on_search_text_changed(self, query: str) -> None:
@@ -384,6 +392,7 @@ class AppController:
         if item is None:
             self._window.show_error("创建失败：请至少添加一张图片。")
             return
+        self._invalidate_rich_cache(item.id)
         self._refresh_items(tab_id)
 
     def _on_add_mixed_item(self, segments: object, note: str) -> None:
@@ -394,10 +403,13 @@ class AppController:
             self._window.show_error("创建失败：图文内容格式错误。")
             return
         try:
-            self._repository.create_mixed_item(tab_id, segments, note=note)
+            item = self._repository.create_mixed_item(tab_id, segments, note=note)
         except Exception as exc:
             self._window.show_error(f"创建图文条目失败：{exc}")
             return
+        if any(isinstance(seg, dict) and str(seg.get("type") or "").lower() == "image" for seg in segments):
+            self._rich_segments_cache[int(item.id)] = list(segments)
+            self._paste_service.prepare_mixed_segments(list(segments))
         self._refresh_items(tab_id)
 
     def _on_edit_item(self, item_id: int, text: str, note: str) -> None:
@@ -406,6 +418,7 @@ class AppController:
         except Exception as exc:
             self._window.show_error(f"编辑失败：{exc}")
             return
+        self._invalidate_rich_cache(item_id)
         tab_id = self._window.current_tab_id()
         if tab_id is not None:
             self._refresh_items(tab_id)
@@ -431,6 +444,7 @@ class AppController:
         except Exception as exc:
             self._window.show_error(f"编辑失败：{exc}")
             return
+        self._invalidate_rich_cache(item_id)
         tab_id = self._window.current_tab_id()
         if tab_id is not None:
             self._refresh_items(tab_id)
@@ -462,6 +476,7 @@ class AppController:
         except Exception as exc:
             self._window.show_error(f"编辑失败：{exc}")
             return
+        self._invalidate_rich_cache(item_id)
         current_tab_id = self._window.current_tab_id()
         if current_tab_id is not None:
             self._refresh_items(current_tab_id)
@@ -483,6 +498,11 @@ class AppController:
         except Exception as exc:
             self._window.show_error(f"保存失败：{exc}")
             return
+        if any(isinstance(seg, dict) and str(seg.get("type") or "").lower() == "image" for seg in segments):
+            self._rich_segments_cache[int(item_id)] = list(segments)
+            self._paste_service.prepare_mixed_segments(list(segments))
+        else:
+            self._invalidate_rich_cache(item_id)
         tab_id = self._window.current_tab_id()
         if tab_id is not None:
             self._refresh_items(tab_id)
@@ -545,6 +565,7 @@ class AppController:
 
     def _on_delete_item(self, item_id: int) -> None:
         self._repository.delete_item(item_id)
+        self._invalidate_rich_cache(item_id)
         tab_id = self._window.current_tab_id()
         if tab_id is not None:
             self._refresh_items(tab_id)
@@ -564,6 +585,7 @@ class AppController:
         if not ok:
             return
         self._repository.clear_items(tab_id)
+        self._clear_rich_prewarm()
         self._refresh_items(tab_id)
 
     def _on_move_items_to_tab(self, item_ids: list[int], target_tab_id: int) -> None:
@@ -582,6 +604,8 @@ class AppController:
         except Exception as exc:
             self._window.show_error(f"移动条目失败：{exc}")
             return
+        for item_id in item_ids:
+            self._invalidate_rich_cache(int(item_id))
 
         if result.moved_count == 0 and result.already_in_target_count > 0:
             self._window.show_info("已在当前标签页")
@@ -640,7 +664,12 @@ class AppController:
                     hide_window=hide_window_cb,
                 )
             elif item_type == "rich":
-                segments = self._repository.get_item_rich_segments(item_id)
+                segments = self._rich_segments_cache.get(int(item_id))
+                if segments is None:
+                    segments = self._repository.get_item_rich_segments(item_id)
+                    if segments:
+                        self._rich_segments_cache[int(item_id)] = segments
+                        self._paste_service.prepare_mixed_segments(segments)
                 if segments:
                     pasted = self._paste_service.paste_mixed_segments(
                         segments,
@@ -843,14 +872,17 @@ class AppController:
                 tabs = self._repository.list_tabs()
                 tab_name_map = {tab.id: tab.name for tab in tabs}
                 self._window.set_items(items, search_mode=True, tab_name_map=tab_name_map)
+                self._schedule_rich_prewarm(items)
                 logger.debug("[UI] refresh_items done search_mode=True items=%s", len(items))
                 return
             if tab_id is None:
                 self._window.set_items([])
+                self._schedule_rich_prewarm([])
                 logger.debug("[UI] refresh_items done tab_id=None items=0")
                 return
             items = self._repository.list_items(tab_id)
             self._window.set_items(items, search_mode=False, tab_name_map=None)
+            self._schedule_rich_prewarm(items)
             logger.debug("[UI] refresh_items done search_mode=False items=%s", len(items))
         except Exception:
             logger.exception(
@@ -858,6 +890,59 @@ class AppController:
                 tab_id,
                 bool(self._search_query),
             )
+
+    def _schedule_rich_prewarm(self, items: list) -> None:
+        visible_rich_ids = [
+            int(item.id)
+            for item in items
+            if getattr(item, "content_type", "") == "rich"
+        ]
+        visible_id_set = set(visible_rich_ids)
+        for cached_id in list(self._rich_segments_cache.keys()):
+            if cached_id not in visible_id_set:
+                self._rich_segments_cache.pop(cached_id, None)
+
+        self._rich_prewarm_timer.stop()
+        self._rich_prewarm_ids = visible_id_set
+        self._rich_prewarm_queue = [
+            item_id
+            for item_id in visible_rich_ids
+            if item_id not in self._rich_segments_cache
+        ]
+        if self._rich_prewarm_queue:
+            self._rich_prewarm_timer.start(120)
+
+    def _prewarm_next_rich_batch(self) -> None:
+        batch_size = 2
+        processed = 0
+        while self._rich_prewarm_queue and processed < batch_size:
+            item_id = self._rich_prewarm_queue.pop(0)
+            if item_id not in self._rich_prewarm_ids:
+                continue
+            if item_id in self._rich_segments_cache:
+                continue
+            try:
+                segments = self._repository.get_item_rich_segments(item_id)
+                if segments:
+                    self._rich_segments_cache[item_id] = segments
+                    self._paste_service.prepare_mixed_segments(segments)
+            except Exception:
+                logger.exception("[Paste] rich prewarm failed item_id=%s", item_id)
+            processed += 1
+        if self._rich_prewarm_queue:
+            self._rich_prewarm_timer.start(120)
+
+    def _invalidate_rich_cache(self, item_id: int) -> None:
+        clean_id = int(item_id)
+        self._rich_segments_cache.pop(clean_id, None)
+        self._rich_prewarm_ids.discard(clean_id)
+        self._rich_prewarm_queue = [queued_id for queued_id in self._rich_prewarm_queue if queued_id != clean_id]
+
+    def _clear_rich_prewarm(self) -> None:
+        self._rich_prewarm_timer.stop()
+        self._rich_segments_cache.clear()
+        self._rich_prewarm_queue = []
+        self._rich_prewarm_ids.clear()
 
     @staticmethod
     def _tab_name(tabs, tab_id: Optional[int]) -> str:
