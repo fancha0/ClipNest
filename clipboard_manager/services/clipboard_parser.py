@@ -378,10 +378,10 @@ class ClipboardContentParser:
             return True
 
         cjk = sum(1 for ch in chars if 0x4E00 <= ord(ch) <= 0x9FFF)
-        punct = sum(1 for ch in chars if re.match(r"[\.\,\!\?\:\;\，\。\、\！\？\：\；\-\_\(\)\[\]【】《》“”‘’/\\|]", ch))
+        punct = sum(1 for ch in chars if re.match(r"[\.\,\!\?\:\;\，\。\、\！\？\：\；\-\_\+\(\)\[\]【】《》“”‘’/\\|]", ch))
         ascii_alnum = sum(1 for ch in chars if ch.isascii() and ch.isalnum())
         unique_ratio = len(set(chars)) / total
-        if total >= 12 and (cjk / total) > 0.9 and punct <= 1 and ascii_alnum == 0 and unique_ratio > 0.94:
+        if total >= 24 and (cjk / total) > 0.9 and punct <= 1 and ascii_alnum == 0 and unique_ratio > 0.94:
             return True
         return False
 

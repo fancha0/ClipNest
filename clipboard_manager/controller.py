@@ -759,9 +759,8 @@ class AppController:
             self._invalidate_items_cache(tab_id)
             self._refresh_items(current_tab_id or tab_id)
         elif current_tab_id == tab_id:
-            if int(tab_id) in self._items_cache:
-                self._items_cache[int(tab_id)].insert(0, inserted)
-            self._window.prepend_item(inserted)
+            self._invalidate_items_cache(tab_id)
+            self._refresh_items(tab_id)
         else:
             self._invalidate_items_cache(tab_id)
 

@@ -163,6 +163,18 @@ class ClipboardParserTests(unittest.TestCase):
         self.assertEqual(parsed.item_type, "text")
         self.assertIn("清风小护店", parsed.display_text)
 
+    def test_parse_short_chinese_marketing_text_not_misdetected_as_special(self) -> None:
+        text = "清风官旗手帕纸 免费寄样+投流"
+        mime = _FakeMimeData(
+            text=text,
+            parts=[{"mime_type": "text/plain;charset=utf-8", "payload_blob": text.encode("utf-8")}],
+        )
+        parsed = self._parser.parse(mime)
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertEqual(parsed.item_type, "text")
+        self.assertEqual(parsed.display_text, text)
+
     def test_parse_private_mime_with_dirty_text_falls_back_to_special(self) -> None:
         dirty_payload = b"\xff\xfe\x81\x00\x90\x00\xa3\x00\x00\xff\x00\x1f\x00\xee"
         mime = _FakeMimeData(
