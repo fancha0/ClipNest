@@ -1,14 +1,12 @@
 from __future__ import annotations
 
+import base64
 import html as html_lib
 import hashlib
-import tempfile
 import sys
-import uuid
-from pathlib import Path
 from typing import Callable, Optional
 
-from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QTimer, Qt, QUrl
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QTimer, Qt
 from PySide6.QtGui import QClipboard, QImage, QPainter
 from PySide6.QtCore import QMimeData
 from pynput.keyboard import Controller, Key
@@ -28,7 +26,7 @@ class PasteService:
         self._clipboard_service = clipboard_service
         self._focus_service = focus_service
         self._keyboard = Controller()
-        self._temp_image_cache: dict[str, Path] = {}
+        self._rich_image_data_uri_cache: dict[tuple[str, str], str] = {}
 
     def paste_text(
         self,
@@ -317,7 +315,6 @@ class PasteService:
         html_parts: list[str] = []
         plain_parts: list[str] = []
         has_image = False
-        has_text = False
 
         for segment in segments or []:
             if not isinstance(segment, dict):
@@ -327,7 +324,6 @@ class PasteService:
                 text = str(segment.get("content") or "")
                 if text == "":
                     continue
-                has_text = True
                 plain_parts.append(text)
                 html_parts.append(html_lib.escape(text).replace("\n", "<br/>"))
                 continue
@@ -335,45 +331,32 @@ class PasteService:
                 blob = segment.get("image_blob")
                 if not isinstance(blob, (bytes, bytearray)) or len(blob) == 0:
                     continue
-                image_path = self._write_temp_image(bytes(blob))
-                if image_path is None:
+                mime_type = str(segment.get("mime_type") or "image/png").strip().lower()
+                image_uri = self._image_data_uri(bytes(blob), mime_type)
+                if image_uri is None:
                     continue
-                image_url = QUrl.fromLocalFile(str(image_path)).toString()
-                escaped_url = html_lib.escape(image_url, quote=True)
                 has_image = True
                 html_parts.append(
-                    f'<img src="{escaped_url}" style="max-width:100%;height:auto;"/>'
+                    f'<img src="{html_lib.escape(image_uri, quote=True)}" '
+                    'style="max-width:100%;height:auto;"/>'
                 )
 
         if not has_image:
             return None
-        if not has_text and not html_parts:
-            return None
         body = "".join(html_parts)
         return f"<html><body>{body}</body></html>", "".join(plain_parts)
 
-    def _write_temp_image(self, image_bytes: bytes) -> Path | None:
+    def _image_data_uri(self, image_bytes: bytes, mime_type: str = "image/png") -> str | None:
+        if not mime_type.startswith("image/"):
+            return None
         image_hash = hashlib.sha256(image_bytes).hexdigest()
-        cached_path = self._temp_image_cache.get(image_hash)
-        if cached_path is not None and cached_path.exists():
-            return cached_path
-
-        image = QImage()
-        if not image.loadFromData(image_bytes):
-            return None
-        temp_dir = Path(tempfile.gettempdir()) / "ClipNestTemp"
-        try:
-            temp_dir.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            return None
-        image_path = temp_dir / f"clipnest_{uuid.uuid4().hex}.png"
-        try:
-            if image.save(str(image_path), "PNG"):
-                self._temp_image_cache[image_hash] = image_path
-                return image_path
-        except Exception:
-            return None
-        return None
+        cache_key = (image_hash, mime_type)
+        cached_uri = self._rich_image_data_uri_cache.get(cache_key)
+        if cached_uri is not None:
+            return cached_uri
+        data_uri = f"data:{mime_type};base64," + base64.b64encode(image_bytes).decode("ascii")
+        self._rich_image_data_uri_cache[cache_key] = data_uri
+        return data_uri
 
     def _run_next_mixed_stage(self, stages: list[tuple[str, object]], index: int) -> None:
         if index >= len(stages):

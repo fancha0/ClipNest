@@ -1468,6 +1468,7 @@ class MainWindow(QMainWindow):
     capture_tab_change_requested = Signal(int)
     note_color_change_requested = Signal(str)
     note_font_size_change_requested = Signal(int)
+    pinned_color_change_requested = Signal(str)
     export_requested = Signal()
     import_requested = Signal()
     search_text_changed = Signal(str)
@@ -1489,6 +1490,7 @@ class MainWindow(QMainWindow):
         self._capture_tab_id: Optional[int] = None
         self._note_text_color = "#1f2937"
         self._note_font_size = 13
+        self._pinned_accent_color = "#1fb8cb"
         self._appearance: AppearanceSettings = default_appearance_settings()
         self._theme_tokens: ThemeTokens = build_theme_tokens_from_appearance(self._appearance)
         self._tabs_snapshot: list[Tab] = []
@@ -1681,6 +1683,8 @@ class MainWindow(QMainWindow):
             has_note_role=ITEM_HAS_NOTE_ROLE,
             secondary_role=ITEM_SECONDARY_TEXT_ROLE,
             type_label_role=ITEM_TYPE_LABEL_ROLE,
+            pinned_role=ITEM_PINNED_ROLE,
+            pinned_color=self._pinned_accent_color,
             note_color=self._note_text_color,
             note_font_size=self._note_font_size,
             tokens=self._theme_tokens,
@@ -1718,10 +1722,13 @@ class MainWindow(QMainWindow):
         self.action_capture_tab.setEnabled(False)
         self.action_note_style = QAction("备注样式：#1f2937 / 13px", self)
         self.action_note_style.setEnabled(False)
+        self.action_pinned_style = QAction("置顶颜色：#1FB8CB", self)
+        self.action_pinned_style.setEnabled(False)
         self.action_set_hotkey = QAction("设置全局快捷键...", self)
         self.action_set_capture_tab = QAction("设置监听存储标签...", self)
         self.action_set_note_color = QAction("设置备注文字颜色...", self)
         self.action_set_note_font_size = QAction("设置备注文字大小...", self)
+        self.action_set_pinned_color = QAction("设置置顶颜色...", self)
         self.action_export_data = QAction("导出标签页与条目...", self)
         self.action_import_data = QAction("导入标签页与条目...", self)
         self.action_reset_hotkey = QAction("恢复默认快捷键", self)
@@ -1732,11 +1739,13 @@ class MainWindow(QMainWindow):
         self.settings_menu.addAction(self.action_current_hotkey)
         self.settings_menu.addAction(self.action_capture_tab)
         self.settings_menu.addAction(self.action_note_style)
+        self.settings_menu.addAction(self.action_pinned_style)
         self.settings_menu.addSeparator()
         self.settings_menu.addAction(self.action_set_hotkey)
         self.settings_menu.addAction(self.action_set_capture_tab)
         self.settings_menu.addAction(self.action_set_note_color)
         self.settings_menu.addAction(self.action_set_note_font_size)
+        self.settings_menu.addAction(self.action_set_pinned_color)
         self.settings_menu.addSeparator()
         self.settings_menu.addAction(self.action_export_data)
         self.settings_menu.addAction(self.action_import_data)
@@ -1751,6 +1760,7 @@ class MainWindow(QMainWindow):
         self.action_set_capture_tab.triggered.connect(self._prompt_capture_tab_dialog)
         self.action_set_note_color.triggered.connect(self._prompt_note_color_dialog)
         self.action_set_note_font_size.triggered.connect(self._prompt_note_font_size_dialog)
+        self.action_set_pinned_color.triggered.connect(self._prompt_pinned_color_dialog)
         self.action_export_data.triggered.connect(self.export_requested.emit)
         self.action_import_data.triggered.connect(self.import_requested.emit)
         self.action_reset_hotkey.triggered.connect(self.hotkey_reset_requested.emit)
@@ -1949,10 +1959,7 @@ class MainWindow(QMainWindow):
         lw_item.setData(ITEM_CONTENT_TEXT_ROLE, content_text)
         lw_item.setData(ITEM_TAB_ID_ROLE, int(item.tab_id))
         lw_item.setData(ITEM_SECONDARY_TEXT_ROLE, row.secondary_text)
-        lw_item.setData(
-            ITEM_TYPE_LABEL_ROLE,
-            f"置顶 · {row.type_label}" if item.pinned else row.type_label,
-        )
+        lw_item.setData(ITEM_TYPE_LABEL_ROLE, row.type_label)
         lw_item.setData(ITEM_PINNED_ROLE, bool(item.pinned))
         return lw_item
 
@@ -2033,8 +2040,19 @@ class MainWindow(QMainWindow):
         self.action_note_style.setText(f"备注样式：{color_hex} / {font_size}px")
         if self._item_delegate is not None:
             self._item_delegate.set_note_style(color_hex, font_size)
+        self.item_list.doItemsLayout()
+        self.item_list.updateGeometry()
         self.item_list.viewport().update()
 
+    def set_pinned_style(self, color_hex: str) -> None:
+        color = QColor(str(color_hex or "").strip())
+        if not color.isValid():
+            color = QColor("#1fb8cb")
+        self._pinned_accent_color = color.name()
+        self.action_pinned_style.setText(f"置顶颜色：{self._pinned_accent_color.upper()}")
+        if self._item_delegate is not None:
+            self._item_delegate.set_pinned_color(self._pinned_accent_color)
+        self.item_list.viewport().update()
     def show_for_quick_paste(self) -> None:
         splitter_count = self._main_splitter.count() if self._main_splitter is not None else -1
         logger.info(
@@ -2475,6 +2493,16 @@ class MainWindow(QMainWindow):
             return
         self.note_color_change_requested.emit(color.name())
 
+    def _prompt_pinned_color_dialog(self) -> None:
+        with self._with_auto_hide_suspended():
+            color = QColorDialog.getColor(
+                QColor(self._pinned_accent_color),
+                self,
+                "设置置顶颜色",
+            )
+        if not color.isValid():
+            return
+        self.pinned_color_change_requested.emit(color.name())
     def _prompt_note_font_size_dialog(self) -> None:
         with self._with_auto_hide_suspended():
             value, ok = QInputDialog.getInt(

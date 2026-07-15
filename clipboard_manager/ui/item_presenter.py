@@ -35,7 +35,7 @@ def present_item(item: ClipItem) -> DisplayRow:
     item_type = _type_label(item.content_type)
     time_text = _format_time(item.created_at)
     meta_text = _meta_summary(item)
-    secondary_segments = ["置顶"] if item.pinned else []
+    secondary_segments = []
     secondary_segments.append(time_text)
     if meta_text:
         secondary_segments.append(meta_text)

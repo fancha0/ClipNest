@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import logging
 import re
@@ -74,10 +74,16 @@ class AppController:
             self._repository.set_setting("note_font_size", str(note_font_size))
         note_font_size = max(10, min(28, note_font_size))
         self._repository.set_setting("note_text_color", note_color)
+        pinned_color = self._normalize_hex(
+            self._repository.get_setting("pinned_accent_color"),
+            "#1fb8cb",
+        )
+        self._repository.set_setting("pinned_accent_color", pinned_color)
 
         self._window.set_tabs(tabs, active_tab_id)
         self._window.set_capture_tab(capture_tab_id, self._tab_name(tabs, capture_tab_id))
         self._window.set_note_style(note_color, note_font_size)
+        self._window.set_pinned_style(pinned_color)
         self._window.set_hotkey_text(self._hotkey_service.hotkey_text)
         autostart_enabled = self._autostart_service.is_enabled()
         self._window.set_autostart_state(autostart_enabled)
@@ -137,6 +143,7 @@ class AppController:
         self._window.capture_tab_change_requested.connect(self._on_capture_tab_change_requested)
         self._window.note_color_change_requested.connect(self._on_note_color_change_requested)
         self._window.note_font_size_change_requested.connect(self._on_note_font_size_change_requested)
+        self._window.pinned_color_change_requested.connect(self._on_pinned_color_change_requested)
         self._window.export_requested.connect(self._on_export_requested)
         self._window.import_requested.connect(self._on_import_requested)
         self._window.search_text_changed.connect(self._on_search_text_changed)
@@ -812,6 +819,10 @@ class AppController:
         font_size = max(10, min(28, font_size))
         self._window.set_note_style(color_hex, font_size)
 
+    def _on_pinned_color_change_requested(self, color_hex: str) -> None:
+        normalized = self._normalize_hex(color_hex, "#1fb8cb")
+        self._repository.set_setting("pinned_accent_color", normalized)
+        self._window.set_pinned_style(normalized)
     def _on_note_font_size_change_requested(self, font_size: int) -> None:
         safe_size = max(10, min(28, int(font_size)))
         self._repository.set_setting("note_font_size", str(safe_size))

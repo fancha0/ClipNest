@@ -17,6 +17,8 @@ class ClipItemDelegate(QStyledItemDelegate):
         has_note_role: int,
         secondary_role: int,
         type_label_role: int,
+        pinned_role: int,
+        pinned_color: str,
         note_color: str,
         note_font_size: int,
         tokens: ThemeTokens | None = None,
@@ -28,6 +30,8 @@ class ClipItemDelegate(QStyledItemDelegate):
         self._has_note_role = int(has_note_role)
         self._secondary_role = int(secondary_role)
         self._type_label_role = int(type_label_role)
+        self._pinned_role = int(pinned_role)
+        self._pinned_color = self._normalized_color(pinned_color, "#1fb8cb")
         self._note_color = QColor(note_color)
         self._note_font_size = int(note_font_size)
         self._tokens = tokens or default_light_business_theme()
@@ -37,6 +41,9 @@ class ClipItemDelegate(QStyledItemDelegate):
         self._note_color = QColor(note_color)
         self._note_font_size = int(note_font_size)
 
+    def set_pinned_color(self, color_hex: str) -> None:
+        self._pinned_color = self._normalized_color(color_hex, "#1fb8cb")
+
     def set_theme_tokens(self, tokens: ThemeTokens) -> None:
         self._tokens = tokens or default_light_business_theme()
 
@@ -45,7 +52,24 @@ class ClipItemDelegate(QStyledItemDelegate):
 
     def sizeHint(self, option: QStyleOptionViewItem, index) -> QSize:
         base = super().sizeHint(option, index)
-        return QSize(base.width(), max(76, base.height()))
+        has_note = bool(index.data(self._has_note_role)) and bool(
+            str(index.data(self._note_role) or "").strip()
+        )
+        main_height = QFontMetrics(option.font).height()
+        if has_note:
+            note_font = QFont(option.font)
+            note_font.setPointSize(self._note_font_size)
+            note_height = QFontMetrics(note_font).height()
+            main_height = max(
+                main_height,
+                note_height + self._tokens.note_badge_padding_y * 2,
+            )
+
+        secondary_font = QFont(option.font)
+        secondary_font.setPointSize(max(9, secondary_font.pointSize() - 1))
+        secondary_height = max(20, QFontMetrics(secondary_font).height())
+        card_height = 28 + main_height + 3 + secondary_height
+        return QSize(base.width(), max(76, base.height(), card_height))
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:
         opt = QStyleOptionViewItem(option)
@@ -61,10 +85,13 @@ class ClipItemDelegate(QStyledItemDelegate):
 
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
         hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
+        pinned = bool(index.data(self._pinned_role))
         card_rect = QRectF(option.rect.adjusted(5, 4, -5, -4))
-        self._draw_card(painter, card_rect, selected=selected, hovered=hovered)
+        self._draw_card(painter, card_rect, selected=selected, hovered=hovered, pinned=pinned)
 
         text_rect = option.rect.adjusted(19, 14, -19, -14)
+        if pinned:
+            text_rect.setLeft(text_rect.left() + 8)
 
         icon_data = index.data(Qt.ItemDataRole.DecorationRole)
         if isinstance(icon_data, QIcon) and not icon_data.isNull():
@@ -112,7 +139,6 @@ class ClipItemDelegate(QStyledItemDelegate):
         has_note = bool(index.data(self._has_note_role)) and bool(note_text)
         if not content_text:
             content_text = str(index.data(Qt.ItemDataRole.DisplayRole) or "").strip()
-
         pill_rect = self._draw_type_pill(painter, text_rect, type_label) if type_label else QRect()
         main_rect = QRect(text_rect)
         if not pill_rect.isNull():
@@ -153,7 +179,7 @@ class ClipItemDelegate(QStyledItemDelegate):
             )
         painter.restore()
 
-    def _draw_card(self, painter: QPainter, rect: QRectF, selected: bool, hovered: bool) -> None:
+    def _draw_card(self, painter: QPainter, rect: QRectF, selected: bool, hovered: bool, pinned: bool = False) -> None:
         shadow_rect = QRectF(rect)
         for offset, alpha in ((5, 16), (3, 18), (1, 12)):
             painter.setPen(Qt.PenStyle.NoPen)
@@ -167,14 +193,39 @@ class ClipItemDelegate(QStyledItemDelegate):
                 painter.setPen(QPen(QColor(45, 166, 224, alpha), 1.2))
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawRoundedRect(glow, 17.0, 17.0)
-
         fill = QColor(255, 255, 255)
-        if hovered and not selected:
+        if pinned:
+            fill = self._pinned_color.lighter(188)
+        elif hovered and not selected:
             fill = QColor(253, 254, 255)
         painter.setBrush(fill)
-        painter.setPen(QPen(QColor(55, 151, 219, 220) if selected else QColor(232, 237, 244), 1.4 if selected else 1.0))
+        border = QColor(55, 151, 219, 220) if selected else QColor(232, 237, 244)
+        border_width = 1.4 if selected else 1.0
+        if pinned and not selected:
+            border = self._color_with_alpha(self._pinned_color.darker(118), 210)
+            border_width = 1.25
+        painter.setPen(QPen(border, border_width))
         painter.drawRoundedRect(rect, 15.0, 15.0)
 
+        if pinned:
+            accent = self._pinned_color
+            accent_rect = QRectF(rect.left() + 1.0, rect.top() + 9.0, 4.0, rect.height() - 18.0)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(accent)
+            painter.drawRoundedRect(accent_rect, 2.0, 2.0)
+
+    @staticmethod
+    def _normalized_color(color_hex: str, fallback: str) -> QColor:
+        color = QColor(str(color_hex or "").strip())
+        if not color.isValid():
+            color = QColor(fallback)
+        return color
+
+    @staticmethod
+    def _color_with_alpha(color: QColor, alpha: int) -> QColor:
+        copy = QColor(color)
+        copy.setAlpha(max(0, min(255, int(alpha))))
+        return copy
     def _draw_type_pill(self, painter: QPainter, rect: QRect, type_label: str) -> QRect:
         pill_font = QFont(painter.font())
         pill_font.setPointSize(max(9, painter.font().pointSize() - 2))
