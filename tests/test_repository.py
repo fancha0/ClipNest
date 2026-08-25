@@ -36,8 +36,8 @@ class ClipRepositoryTests(unittest.TestCase):
         repo = self._make_repo(self.db_path, max_items_per_tab=500)
         tab_id = _tab_ids(repo)[0]
 
-        first = repo.upsert_item(tab_id, "hello world")
-        second = repo.upsert_item(tab_id, "hello world")
+        first = repo.upsert_text_item(tab_id, "hello world")
+        second = repo.upsert_text_item(tab_id, "hello world")
 
         self.assertIsNotNone(first)
         self.assertIsNotNone(second)
@@ -50,8 +50,8 @@ class ClipRepositoryTests(unittest.TestCase):
         first_tab = tab_ids[0]
         second_tab = tab_ids[1]
 
-        one = repo.upsert_item(first_tab, "same-content")
-        two = repo.upsert_item(second_tab, "same-content")
+        one = repo.upsert_text_item(first_tab, "same-content")
+        two = repo.upsert_text_item(second_tab, "same-content")
 
         self.assertIsNotNone(one)
         self.assertIsNotNone(two)
@@ -63,10 +63,10 @@ class ClipRepositoryTests(unittest.TestCase):
         repo = self._make_repo(self.db_path, max_items_per_tab=3)
         tab_id = _tab_ids(repo)[0]
 
-        repo.upsert_item(tab_id, "1")
-        repo.upsert_item(tab_id, "2")
-        repo.upsert_item(tab_id, "3")
-        repo.upsert_item(tab_id, "4")
+        repo.upsert_text_item(tab_id, "1")
+        repo.upsert_text_item(tab_id, "2")
+        repo.upsert_text_item(tab_id, "3")
+        repo.upsert_text_item(tab_id, "4")
 
         texts = [item.text for item in repo.list_items(tab_id)]
         self.assertEqual(texts, ["4", "3", "2"])
@@ -75,13 +75,13 @@ class ClipRepositoryTests(unittest.TestCase):
         repo = self._make_repo(self.db_path, max_items_per_tab=3)
         tab_id = _tab_ids(repo)[0]
 
-        pinned_item = repo.upsert_item(tab_id, "old-pinned")
+        pinned_item = repo.upsert_text_item(tab_id, "old-pinned")
         self.assertIsNotNone(pinned_item)
         repo.set_item_pinned(pinned_item.id, True)
 
-        repo.upsert_item(tab_id, "2")
-        repo.upsert_item(tab_id, "3")
-        repo.upsert_item(tab_id, "4")
+        repo.upsert_text_item(tab_id, "2")
+        repo.upsert_text_item(tab_id, "3")
+        repo.upsert_text_item(tab_id, "4")
 
         items = repo.list_items(tab_id)
         texts = [item.text for item in items]
@@ -100,11 +100,11 @@ class ClipRepositoryTests(unittest.TestCase):
         self.assertEqual(repo.get_tab_capacity(other_tab), 3)
 
         for i in range(6):
-            repo.upsert_item(capture_tab, f"capture-{i}")
+            repo.upsert_text_item(capture_tab, f"capture-{i}")
         self.assertEqual(len(repo.list_items(capture_tab)), 5)
 
         for i in range(4):
-            repo.upsert_item(other_tab, f"other-{i}")
+            repo.upsert_text_item(other_tab, f"other-{i}")
         self.assertEqual(len(repo.list_items(other_tab)), 3)
 
         repo.set_tab_capacity(capture_tab, None)
@@ -115,7 +115,7 @@ class ClipRepositoryTests(unittest.TestCase):
         tab_id = _tab_ids(repo)[0]
 
         for i in range(8):
-            repo.upsert_item(tab_id, f"item-{i}")
+            repo.upsert_text_item(tab_id, f"item-{i}")
         self.assertEqual(repo.tab_item_count(tab_id), 8)
 
         repo.set_tab_capacity(tab_id, 5)
@@ -133,7 +133,7 @@ class ClipRepositoryTests(unittest.TestCase):
         repo = self._make_repo(self.db_path, max_items_per_tab=500)
         target_tab = _tab_ids(repo)[0]
 
-        repo.upsert_item(target_tab, "to-be-deleted")
+        repo.upsert_text_item(target_tab, "to-be-deleted")
         self.assertEqual(repo.tab_item_count(target_tab), 1)
 
         repo.delete_tab(target_tab)

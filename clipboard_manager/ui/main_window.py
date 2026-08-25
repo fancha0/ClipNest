@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import hashlib
 import logging
@@ -40,17 +40,13 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
-    QCheckBox,
-    QColorDialog,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
     QFrame,
     QFormLayout,
-    QGridLayout,
     QHBoxLayout,
     QInputDialog,
-    QKeySequenceEdit,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -60,7 +56,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSplitter,
-    QSpinBox,
     QStyle,
     QSystemTrayIcon,
     QTextEdit,
@@ -74,6 +69,9 @@ from ..models import ClipItem, Tab
 from ..config import APP_NAME, MAX_ITEMS_PER_TAB
 from ..icon_utils import resolve_app_icon
 from .settings_dialog import SettingsDialog
+from .dialog_base import ResizableDialog
+from .image_mixin import ImageMimeMixin
+from .image_codec import encode_qimage_to_payload
 from .item_presenter import present_item
 from .item_delegate import ClipItemDelegate
 from .theme import (
@@ -305,7 +303,7 @@ class ReorderableItemListWidget(DragAutoScrollListWidget):
         return target_row + 1 if point.y() >= rect.center().y() else target_row
 
 
-class BundleImageInputList(QListWidget):
+class BundleImageInputList(ImageMimeMixin, QListWidget):
     images_received = Signal(object)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
@@ -434,70 +432,9 @@ class BundleImageInputList(QListWidget):
 
         return images
 
-    @staticmethod
-    def _mime_may_contain_images(mime_data) -> bool:
-        if mime_data is None:
-            return False
-        if mime_data.hasImage():
-            return True
-        if not mime_data.hasUrls():
-            return False
-        for url in mime_data.urls():
-            if not url.isLocalFile():
-                continue
-            local_path = url.toLocalFile()
-            if local_path and not QImage(local_path).isNull():
-                return True
-        return False
-
-    @staticmethod
-    def _image_from_mime_data(mime_data) -> Optional[QImage]:
-        if mime_data is None or not mime_data.hasImage():
-            return None
-        data = mime_data.imageData()
-        image = QImage()
-        if isinstance(data, QImage):
-            image = data
-        elif isinstance(data, QPixmap):
-            image = data.toImage()
-        elif data is not None:
-            try:
-                image = QImage(data)
-            except Exception:
-                image = QImage()
-        return image if not image.isNull() else None
-
-    @staticmethod
-    def _image_fingerprint(image: QImage) -> str:
-        import hashlib
-        ptr = image.bits()
-        if ptr is not None:
-            data = bytes(image.sizeInBytes())
-            return hashlib.md5(data).hexdigest() + f":{image.width()}x{image.height()}"
-        return f"{image.cacheKey()}:{image.width()}x{image.height()}"
-
-    @staticmethod
-    def _image_to_payload(image: QImage) -> Optional[dict[str, Any]]:
-        return _encode_qimage_to_payload(image, "image/png")
-
 
 def _encode_qimage_to_payload(image: QImage, mime_type: str = "image/png") -> Optional[dict[str, Any]]:
-    if image.isNull():
-        return None
-    data = QByteArray()
-    buf = QBuffer(data)
-    if not buf.open(QIODevice.OpenModeFlag.WriteOnly):
-        return None
-    ok = image.save(buf, "PNG")
-    buf.close()
-    if not ok:
-        return None
-    return {
-        "image_blob": bytes(data),
-        "mime_type": str(mime_type or "image/png"),
-        "width": image.width(),
-        "height": image.height(),
-    }
+    return encode_qimage_to_payload(image, mime_type)
 
 
 class _ImageEncodeSignals(QObject):
@@ -523,7 +460,7 @@ class _ImageEncodeTask(QRunnable):
         self._signals.finished.emit(self._image_name, payload)
 
 
-class MixedContentEdit(QTextEdit):
+class MixedContentEdit(ImageMimeMixin, QTextEdit):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setAcceptRichText(True)
@@ -843,54 +780,12 @@ class MixedContentEdit(QTextEdit):
                 images.append({"qimage": candidate, "mime_type": "image/png"})
         return images
 
-    @staticmethod
-    def _mime_may_contain_images(mime_data) -> bool:
-        if mime_data is None:
-            return False
-        if mime_data.hasImage():
-            return True
-        if not mime_data.hasUrls():
-            return False
-        for url in mime_data.urls():
-            if not url.isLocalFile():
-                continue
-            local_path = url.toLocalFile()
-            if local_path and not QImage(local_path).isNull():
-                return True
-        return False
 
-    @staticmethod
-    def _image_from_mime_data(mime_data) -> Optional[QImage]:
-        if mime_data is None or not mime_data.hasImage():
-            return None
-        data = mime_data.imageData()
-        image = QImage()
-        if isinstance(data, QImage):
-            image = data
-        elif isinstance(data, QPixmap):
-            image = data.toImage()
-        elif data is not None:
-            try:
-                image = QImage(data)
-            except Exception:
-                image = QImage()
-        return image if not image.isNull() else None
+class BundleItemDialog(ResizableDialog):
+    _size_key = "bundle_item"
+    _default_size = (640, 560)
+    _min_size = (460, 420)
 
-    @staticmethod
-    def _image_fingerprint(image: QImage) -> str:
-        import hashlib
-        ptr = image.bits()
-        if ptr is not None:
-            data = bytes(image.sizeInBytes())
-            return hashlib.md5(data).hexdigest() + f":{image.width()}x{image.height()}"
-        return f"{image.cacheKey()}:{image.width()}x{image.height()}"
-
-    @staticmethod
-    def _image_to_payload(image: QImage) -> Optional[dict[str, Any]]:
-        return _encode_qimage_to_payload(image, "image/png")
-
-
-class BundleItemDialog(QDialog):
     def __init__(
         self,
         parent: QWidget,
@@ -902,7 +797,6 @@ class BundleItemDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
-        self.setModal(True)
         self._images: list[dict[str, Any]] = list(initial_images or [])
         self._require_image = bool(require_image)
         self._note = (initial_note or "").strip()
@@ -915,9 +809,9 @@ class BundleItemDialog(QDialog):
     def _build_ui(self, initial_text: str) -> None:
         layout = QVBoxLayout(self)
         self.content_edit = MixedContentEdit(self)
-        self.content_edit.setMinimumHeight(360)
+        self.content_edit.setMinimumHeight(280)
         self.content_edit.set_initial_content(initial_text, self._images)
-        layout.addWidget(self.content_edit)
+        layout.addWidget(self.content_edit, 1)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
@@ -963,7 +857,11 @@ class BundleItemDialog(QDialog):
         return self._note
 
 
-class EditItemDialog(QDialog):
+class EditItemDialog(ResizableDialog):
+    _size_key = "edit_item"
+    _default_size = (560, 480)
+    _min_size = (420, 380)
+
     def __init__(
         self,
         parent: QWidget,
@@ -973,7 +871,6 @@ class EditItemDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("编辑条目")
-        self.setModal(True)
         self._item_type = item_type
         self._result_type = item_type
         self._image_bytes: bytes | None = None
@@ -987,7 +884,7 @@ class EditItemDialog(QDialog):
 
         self.text_edit = QTextEdit(self)
         self.text_edit.setPlainText(initial_text)
-        layout.addWidget(self.text_edit)
+        layout.addWidget(self.text_edit, 1)
 
         self.image_info_label = QLabel("当前为文本模式。", self)
         self.image_info_label.setStyleSheet("color: #555;")
@@ -1096,7 +993,11 @@ class EditItemDialog(QDialog):
         return self.note_edit.toPlainText().strip()
 
 
-class MultiSelectDialog(QDialog):
+class MultiSelectDialog(ResizableDialog):
+    _size_key = "multi_select"
+    _default_size = (460, 420)
+    _min_size = (360, 300)
+
     def __init__(
         self,
         parent: QWidget,
@@ -1106,7 +1007,6 @@ class MultiSelectDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
-        self.setModal(True)
         self._bulk_check_update = False
         layout = QVBoxLayout(self)
         desc = QLabel(prompt, self)
@@ -1133,7 +1033,7 @@ class MultiSelectDialog(QDialog):
             item.setCheckState(Qt.CheckState.Checked)
             self.option_list.addItem(item)
         self.option_list.itemChanged.connect(self._on_item_changed)
-        layout.addWidget(self.option_list)
+        layout.addWidget(self.option_list, 1)
         self._refresh_select_all_button_text()
 
         buttons = QDialogButtonBox(
@@ -1197,256 +1097,6 @@ class MultiSelectDialog(QDialog):
         return result
 
 
-class AppearanceDialog(QDialog):
-    _PRESET_COLORS: dict[str, tuple[str, str, str]] = {
-        "简约浅灰": ("#F6F7FA", "#FFFFFF", "#CFE0F6"),
-        "商务蓝灰": ("#EEF2F7", "#F9FBFF", "#B9D1F0"),
-        "高对比": ("#FFFFFF", "#F4F7FC", "#A9CCFF"),
-    }
-
-    def __init__(
-        self,
-        parent: QWidget,
-        current: AppearanceSettings,
-        defaults: AppearanceSettings,
-    ) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("外观设置")
-        self.setModal(True)
-        self._defaults = defaults
-        self._window_bg = current.window_bg
-        self._item_bg = current.item_bg
-        self._item_selected_bg = current.item_selected_bg
-        self._preview_cards: dict[str, QFrame] = {}
-        self._preview_titles: dict[str, QLabel] = {}
-        self._preview_samples: dict[str, QLabel] = {}
-        self._build_ui(current)
-
-    def _build_ui(self, current: AppearanceSettings) -> None:
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(10)
-
-        preview_container = QFrame(self)
-        preview_container.setObjectName("appearancePreviewContainer")
-        preview_container.setFrameShape(QFrame.Shape.StyledPanel)
-        preview_layout = QVBoxLayout(preview_container)
-        preview_layout.setContentsMargins(10, 10, 10, 10)
-        preview_layout.setSpacing(8)
-        preview_layout.addWidget(QLabel("颜色预览", preview_container))
-
-        preview_grid = QGridLayout()
-        preview_grid.setHorizontalSpacing(8)
-        preview_grid.setVerticalSpacing(8)
-        preview_grid.addWidget(self._create_preview_card("window", "窗口背景", "主区域"), 0, 0)
-        preview_grid.addWidget(self._create_preview_card("item", "正常条目", "未选中条目"), 0, 1)
-        preview_grid.addWidget(self._create_preview_card("selected", "选中条目", "当前选中条目"), 1, 0)
-        preview_grid.addWidget(self._create_preview_card("chrome", "菜单/标签/工具栏", "导航与菜单"), 1, 1)
-        preview_layout.addLayout(preview_grid)
-        layout.addWidget(preview_container)
-
-        preset_row = QHBoxLayout()
-        preset_row.setSpacing(6)
-        preset_row.addWidget(QLabel("一键配色：", self))
-        for preset_name in ("简约浅灰", "商务蓝灰", "高对比"):
-            btn = QPushButton(preset_name, self)
-            btn.clicked.connect(lambda _=False, name=preset_name: self._apply_preset(name))
-            preset_row.addWidget(btn)
-        preset_row.addStretch(1)
-        layout.addLayout(preset_row)
-
-        form = QFormLayout()
-        form.setHorizontalSpacing(8)
-        form.setVerticalSpacing(8)
-        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-
-        self.window_bg_btn = QPushButton(self)
-        self.window_bg_btn.clicked.connect(lambda: self._pick_color("window_bg"))
-        self._apply_color_preview(self.window_bg_btn, self._window_bg)
-        form.addRow("背景颜色：", self.window_bg_btn)
-
-        self.font_size_spin = QSpinBox(self)
-        self.font_size_spin.setRange(10, 28)
-        self.font_size_spin.setValue(int(current.font_size))
-        form.addRow("全局字体大小：", self.font_size_spin)
-
-        self.item_bg_btn = QPushButton(self)
-        self.item_bg_btn.clicked.connect(lambda: self._pick_color("item_bg"))
-        self._apply_color_preview(self.item_bg_btn, self._item_bg)
-        form.addRow("正常条目背景：", self.item_bg_btn)
-
-        self.item_selected_bg_btn = QPushButton(self)
-        self.item_selected_bg_btn.clicked.connect(lambda: self._pick_color("item_selected_bg"))
-        self._apply_color_preview(self.item_selected_bg_btn, self._item_selected_bg)
-        form.addRow("选中条目背景：", self.item_selected_bg_btn)
-
-        layout.addLayout(form)
-
-        self.show_scrollbar_chk = QCheckBox("显示滚动条", self)
-        self.show_scrollbar_chk.setChecked(bool(current.show_scrollbar))
-        layout.addWidget(self.show_scrollbar_chk)
-
-        self.antialias_chk = QCheckBox("条目抗锯齿", self)
-        self.antialias_chk.setChecked(bool(current.item_antialias))
-        layout.addWidget(self.antialias_chk)
-
-        buttons_row = QHBoxLayout()
-        buttons_row.addStretch(1)
-        self.reset_btn = QPushButton("重置默认", self)
-        self.reset_btn.clicked.connect(self._reset_defaults)
-        buttons_row.addWidget(self.reset_btn)
-        layout.addLayout(buttons_row)
-
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Apply | QDialogButtonBox.StandardButton.Cancel,
-            parent=self,
-        )
-        apply_btn = buttons.button(QDialogButtonBox.StandardButton.Apply)
-        if apply_btn is not None:
-            apply_btn.setText("应用")
-            apply_btn.clicked.connect(self.accept)
-            apply_btn.setDefault(True)
-        cancel_btn = buttons.button(QDialogButtonBox.StandardButton.Cancel)
-        if cancel_btn is not None:
-            cancel_btn.setText("取消")
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-        self._refresh_preview_cards()
-
-    def _create_preview_card(self, key: str, title: str, sample: str) -> QFrame:
-        card = QFrame(self)
-        card.setFrameShape(QFrame.Shape.StyledPanel)
-        card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(8, 8, 8, 8)
-        card_layout.setSpacing(4)
-
-        title_label = QLabel(title, card)
-        sample_label = QLabel(sample, card)
-        card_layout.addWidget(title_label)
-        card_layout.addWidget(sample_label)
-
-        self._preview_cards[key] = card
-        self._preview_titles[key] = title_label
-        self._preview_samples[key] = sample_label
-        return card
-
-    def _pick_color(self, key: str) -> None:
-        current_value = self._window_bg if key == "window_bg" else (
-            self._item_bg if key == "item_bg" else self._item_selected_bg
-        )
-        color = QColorDialog.getColor(QColor(current_value), self, "选择颜色")
-        if not color.isValid():
-            return
-        value = color.name()
-        if key == "window_bg":
-            self._window_bg = value
-            self._apply_color_preview(self.window_bg_btn, value)
-        elif key == "item_bg":
-            self._item_bg = value
-            self._apply_color_preview(self.item_bg_btn, value)
-        else:
-            self._item_selected_bg = value
-            self._apply_color_preview(self.item_selected_bg_btn, value)
-        self._refresh_preview_cards()
-
-    def _reset_defaults(self) -> None:
-        self._window_bg = self._defaults.window_bg
-        self._item_bg = self._defaults.item_bg
-        self._item_selected_bg = self._defaults.item_selected_bg
-        self.font_size_spin.setValue(int(self._defaults.font_size))
-        self.show_scrollbar_chk.setChecked(bool(self._defaults.show_scrollbar))
-        self.antialias_chk.setChecked(bool(self._defaults.item_antialias))
-        self._apply_color_preview(self.window_bg_btn, self._window_bg)
-        self._apply_color_preview(self.item_bg_btn, self._item_bg)
-        self._apply_color_preview(self.item_selected_bg_btn, self._item_selected_bg)
-        self._refresh_preview_cards()
-
-    def _apply_preset(self, preset_name: str) -> None:
-        colors = self._PRESET_COLORS.get(preset_name)
-        if colors is None:
-            return
-        self._window_bg, self._item_bg, self._item_selected_bg = colors
-        self._apply_color_preview(self.window_bg_btn, self._window_bg)
-        self._apply_color_preview(self.item_bg_btn, self._item_bg)
-        self._apply_color_preview(self.item_selected_bg_btn, self._item_selected_bg)
-        self._refresh_preview_cards()
-
-    def _refresh_preview_cards(self) -> None:
-        chrome_bg = self._mix_colors(self._window_bg, self._item_selected_bg, 0.35)
-        self._apply_preview_card("window", self._window_bg)
-        self._apply_preview_card("item", self._item_bg)
-        self._apply_preview_card("selected", self._item_selected_bg)
-        self._apply_preview_card("chrome", chrome_bg)
-
-    def _apply_preview_card(self, key: str, color_hex: str) -> None:
-        card = self._preview_cards.get(key)
-        title = self._preview_titles.get(key)
-        sample = self._preview_samples.get(key)
-        if card is None or title is None or sample is None:
-            return
-        text_color = self._best_text_color(color_hex)
-        border_color = self._border_color(color_hex)
-        card.setStyleSheet(
-            "QFrame {"
-            f"background: {color_hex};"
-            f"border: 1px solid {border_color};"
-            "border-radius: 6px;"
-            "}"
-        )
-        title.setStyleSheet(f"border: none; color: {text_color}; font-weight: 600; background: transparent;")
-        sample.setStyleSheet(f"border: none; color: {text_color}; background: transparent;")
-
-    @staticmethod
-    def _apply_color_preview(button: QPushButton, color_hex: str) -> None:
-        text_color = AppearanceDialog._best_text_color(color_hex)
-        border_color = AppearanceDialog._border_color(color_hex)
-        button.setText(color_hex.upper())
-        button.setStyleSheet(
-            "text-align: left; padding-left: 10px; border-radius: 6px;"
-            f"background: {color_hex};"
-            f"border: 1px solid {border_color};"
-            f"color: {text_color};"
-        )
-
-    @staticmethod
-    def _best_text_color(color_hex: str) -> str:
-        color = QColor(color_hex)
-        if not color.isValid():
-            return "#1f2937"
-        luminance = (0.299 * color.redF()) + (0.587 * color.greenF()) + (0.114 * color.blueF())
-        return "#111827" if luminance >= 0.62 else "#F9FAFB"
-
-    @staticmethod
-    def _border_color(color_hex: str) -> str:
-        color = QColor(color_hex)
-        if not color.isValid():
-            return "#B7C3D4"
-        return color.darker(120).name()
-
-    @staticmethod
-    def _mix_colors(left_hex: str, right_hex: str, ratio: float) -> str:
-        left = QColor(left_hex)
-        right = QColor(right_hex)
-        if not left.isValid():
-            left = QColor("#F6F7FA")
-        if not right.isValid():
-            right = QColor("#CFE0F6")
-        clamped = max(0.0, min(1.0, float(ratio)))
-        red = int(left.red() * (1.0 - clamped) + right.red() * clamped)
-        green = int(left.green() * (1.0 - clamped) + right.green() * clamped)
-        blue = int(left.blue() * (1.0 - clamped) + right.blue() * clamped)
-        return QColor(red, green, blue).name()
-
-    def result_appearance(self) -> AppearanceSettings:
-        return AppearanceSettings(
-            window_bg=self._window_bg,
-            font_size=int(self.font_size_spin.value()),
-            item_bg=self._item_bg,
-            item_selected_bg=self._item_selected_bg,
-            show_scrollbar=bool(self.show_scrollbar_chk.isChecked()),
-            item_antialias=bool(self.antialias_chk.isChecked()),
-        )
-
 
 class MainWindow(QMainWindow):
     tab_selected = Signal(int)
@@ -1465,18 +1115,10 @@ class MainWindow(QMainWindow):
     delete_item_requested = Signal(int)
     clear_items_requested = Signal(int)
     item_activated = Signal(int)
-    hotkey_change_requested = Signal(str)
-    hotkey_reset_requested = Signal()
-    capture_tab_change_requested = Signal(int)
-    capture_tab_max_change_requested = Signal(int)
-    note_color_change_requested = Signal(str)
-    note_font_size_change_requested = Signal(int)
-    pinned_color_change_requested = Signal(str)
     export_requested = Signal()
     import_requested = Signal()
     search_text_changed = Signal(str)
     splitter_sizes_changed = Signal(str)
-    appearance_change_requested = Signal(object)
     item_order_changed = Signal(list, int)
     move_items_requested = Signal(list, int)
     start_inline_edit_requested = Signal(int)

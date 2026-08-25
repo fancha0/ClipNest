@@ -3,7 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-ClipboardItemType = Literal["text", "html", "image", "files", "url", "special"]
+ClipboardItemType = Literal[
+    "text",
+    "html",
+    "image",
+    "files",
+    "url",
+    "special",
+    "bundle",
+    "rich",
+    "raw_snapshot",
+]
 
 
 @dataclass(slots=True)

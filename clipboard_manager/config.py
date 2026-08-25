@@ -6,7 +6,7 @@ from pathlib import Path
 
 APP_NAME = "ClipNest"
 LEGACY_APP_NAMES = ("FluxClip", "CrossClipboard")
-MAX_ITEMS_PER_TAB = 500
+MAX_ITEMS_PER_TAB = 100
 DEFAULT_TABS = ["常用语", "代码", "地址", "账号"]
 AUTO_HIDE_ON_PASTE = True
 

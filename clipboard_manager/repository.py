@@ -793,9 +793,6 @@ class ClipRepository:
             return None
         return self._to_item(row)
 
-    def upsert_item(self, tab_id: int, text: str) -> Optional[ClipItem]:
-        return self.upsert_text_item(tab_id, text)
-
     def upsert_text_item(self, tab_id: int, text: str) -> Optional[ClipItem]:
         if text is None:
             return None

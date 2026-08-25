@@ -18,6 +18,7 @@ from .services.hotkey_service import HotkeyService
 from .services.paste_service import PasteService
 from .services.autostart_service import AutoStartService
 from .ui.main_window import MainWindow
+from .ui.dialog_base import load_dialog_sizes_from_setting, dump_dialog_sizes_to_setting
 from .ui.theme import AppearanceSettings, default_appearance_settings, normalize_hex_color
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,7 @@ class AppController:
         self._rich_prewarm_timer.setSingleShot(True)
         self._rich_prewarm_timer.setInterval(80)
         self._rich_prewarm_timer.timeout.connect(self._prewarm_next_rich_batch)
+        load_dialog_sizes_from_setting(self._repository.get_setting("dialog_sizes") or "")
         self._connect_signals()
 
     def initialize(self) -> None:
@@ -119,6 +121,10 @@ class AppController:
 
     def shutdown(self) -> None:
         self._hotkey_service.stop()
+        try:
+            self._repository.set_setting("dialog_sizes", dump_dialog_sizes_to_setting())
+        except Exception:
+            logger.exception("[UI] save dialog sizes failed")
         self._repository.close()
 
     def _connect_signals(self) -> None:
@@ -144,22 +150,13 @@ class AppController:
         self._window.clear_items_requested.connect(self._on_clear_items)
         self._window.move_items_requested.connect(self._on_move_items_to_tab)
         self._window.item_activated.connect(self._on_item_activated)
-        self._window.hotkey_change_requested.connect(self._on_hotkey_change_requested)
-        self._window.hotkey_reset_requested.connect(self._on_hotkey_reset_requested)
-        self._window.capture_tab_change_requested.connect(self._on_capture_tab_change_requested)
-        self._window.capture_tab_max_change_requested.connect(self._on_capture_tab_max_change_requested)
         self._window.settings_save_requested.connect(self._on_settings_save_requested)
-        self._window.note_color_change_requested.connect(self._on_note_color_change_requested)
-        self._window.note_font_size_change_requested.connect(self._on_note_font_size_change_requested)
-        self._window.pinned_color_change_requested.connect(self._on_pinned_color_change_requested)
         self._window.export_requested.connect(self._on_export_requested)
         self._window.import_requested.connect(self._on_import_requested)
         self._window.search_text_changed.connect(self._on_search_text_changed)
         self._window.splitter_sizes_changed.connect(self._on_splitter_sizes_changed)
-        self._window.appearance_change_requested.connect(self._on_appearance_change_requested)
         self._window.start_inline_edit_requested.connect(self._on_start_inline_edit)
         self._window.save_inline_edit_requested.connect(self._on_save_inline_edit)
-        self._window.autostart_change_requested.connect(self._on_autostart_change_requested)
 
     def _parse_int_setting(self, key: str) -> Optional[int]:
         value = self._repository.get_setting(key)

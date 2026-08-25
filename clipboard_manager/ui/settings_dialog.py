@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from .theme import AppearanceSettings, default_appearance_settings
+from .dialog_base import ResizableDialog
 
 PRESET_COLORS = {
     "简约浅灰": ("#f6f8fb", "#ffffff", "#eef7ff"),
@@ -43,7 +44,11 @@ class SettingsPayload:
     pinned_color: str
 
 
-class SettingsDialog(QDialog):
+class SettingsDialog(ResizableDialog):
+    _size_key = "settings"
+    _default_size = (540, 520)
+    _min_size = (440, 400)
+
     def __init__(
         self,
         parent: QWidget,
@@ -60,8 +65,6 @@ class SettingsDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("设置")
-        self.setModal(True)
-        self.resize(540, 520)
 
         self._tabs = list(tabs)
         self._appearance = appearance
