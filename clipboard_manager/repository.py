@@ -33,9 +33,36 @@ class ClipRepository:
     RAW_SNAPSHOT_DEDUPE_WINDOW_MS = 1000
     PACKAGE_VERSION = 1
 
+    _LIST_ITEM_COLUMNS = ",\n                    ".join(
+        [
+            "i.id",
+            "i.tab_id",
+            "i.sort_order",
+            "i.content_type",
+            "i.text",
+            "i.mime_type",
+            "i.width",
+            "i.height",
+            "i.content_hash",
+            "i.created_at",
+            "i.last_used_at",
+            "i.use_count",
+            "i.note",
+            "i.display_text",
+            "i.plain_text",
+            "i.html_text",
+            "i.file_paths_json",
+            "i.mime_formats_json",
+            "i.pinned",
+            "i.source_app",
+            "i.thumb_blob",
+        ]
+    )
+
     def __init__(self, db_path: Path, max_items_per_tab: int = MAX_ITEMS_PER_TAB) -> None:
         self.db_path = Path(db_path)
         self.max_items_per_tab = max_items_per_tab
+        self._tab_capacity_overrides: dict[int, int] = {}
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = None
         self._initialize()
@@ -493,7 +520,8 @@ class ClipRepository:
         if export_path.suffix.lower() != ".fluxpkg":
             export_path = export_path.with_suffix(".fluxpkg")
 
-        with self._open_connection() as conn:
+        conn = self._open_connection()
+        try:
             rows = conn.execute("SELECT * FROM tabs").fetchall()
             tab_map = {int(row["id"]): row for row in rows}
             if set(normalized_ids) - set(tab_map.keys()):
@@ -542,6 +570,8 @@ class ClipRepository:
                     "manifest.json",
                     json.dumps(manifest, ensure_ascii=False, indent=2),
                 )
+        finally:
+            conn.close()
 
         return ExportResult(
             path=str(export_path),
@@ -679,9 +709,9 @@ class ClipRepository:
     def list_items(self, tab_id: int) -> list[ClipItem]:
         with self._connect() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT
-                    i.*,
+                    {self._LIST_ITEM_COLUMNS},
                     (SELECT COUNT(*) FROM item_images bi WHERE bi.item_id = i.id) AS image_count,
                     (SELECT COUNT(*) FROM item_mime_parts mp WHERE mp.item_id = i.id) AS mime_part_count
                 FROM items i
@@ -704,9 +734,9 @@ class ClipRepository:
         like_pattern = f"%{escaped_query}%"
         with self._connect() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT
-                    i.*,
+                    {self._LIST_ITEM_COLUMNS},
                     (SELECT COUNT(*) FROM item_images bi WHERE bi.item_id = i.id) AS image_count,
                     (SELECT COUNT(*) FROM item_mime_parts mp WHERE mp.item_id = i.id) AS mime_part_count
                 FROM items i
@@ -1603,25 +1633,43 @@ class ClipRepository:
             if owns_conn:
                 conn.close()
 
-    def _enforce_capacity(self, conn: sqlite3.Connection, tab_id: int) -> None:
+    def set_tab_capacity(self, tab_id: int, max_items: Optional[int]) -> None:
+        """Set a per-tab capacity override; None restores the global default."""
+        tab_id = int(tab_id)
+        if max_items is None:
+            self._tab_capacity_overrides.pop(tab_id, None)
+            return
+        self._tab_capacity_overrides[tab_id] = max(1, int(max_items))
+
+    def get_tab_capacity(self, tab_id: int) -> int:
+        return self._tab_capacity_overrides.get(int(tab_id), self.max_items_per_tab)
+
+    def enforce_tab_capacity_now(self, tab_id: int) -> int:
+        """Trim the tab down to its capacity; returns number of deleted items."""
+        with self._connect() as conn:
+            return self._enforce_capacity(conn, int(tab_id))
+
+    def _enforce_capacity(self, conn: sqlite3.Connection, tab_id: int) -> int:
+        limit = self.get_tab_capacity(tab_id)
         count_row = conn.execute("SELECT COUNT(*) AS c FROM items WHERE tab_id = ?", (tab_id,)).fetchone()
         count = int(count_row["c"])
-        overflow = count - self.max_items_per_tab
+        overflow = count - limit
         if overflow <= 0:
-            return
+            return 0
         rows = conn.execute(
             """
             SELECT id FROM items
-            WHERE tab_id = ?
+            WHERE tab_id = ? AND pinned = 0
             ORDER BY created_at ASC, id ASC
             LIMIT ?
             """,
             (tab_id, overflow),
         ).fetchall()
         if not rows:
-            return
+            return 0
         ids = [str(row["id"]) for row in rows]
         conn.execute(f"DELETE FROM items WHERE id IN ({','.join(ids)})")
+        return len(ids)
 
     def _prepare_bundle_images(self, images: list[dict[str, Any]]) -> list[dict[str, Any]]:
         prepared: list[dict[str, Any]] = []

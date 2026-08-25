@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 import sys
@@ -44,6 +45,8 @@ class AppController:
         self._capture_tab_id: Optional[int] = None
         self._search_query: str = ""
         self._items_cache: dict[int, list] = {}
+        self._pending_items_refresh = False
+        self._pending_items_refresh_tab: Optional[int] = None
         self._rich_segments_cache: dict[int, list[dict]] = {}
         self._rich_prewarm_queue: list[int] = []
         self._rich_prewarm_ids: set[int] = set()
@@ -82,6 +85,8 @@ class AppController:
 
         self._window.set_tabs(tabs, active_tab_id)
         self._window.set_capture_tab(capture_tab_id, self._tab_name(tabs, capture_tab_id))
+        self._load_tab_capacities()
+        self._window.set_capture_tab_max(self._repository.get_tab_capacity(capture_tab_id))
         self._window.set_note_style(note_color, note_font_size)
         self._window.set_pinned_style(pinned_color)
         self._window.set_hotkey_text(self._hotkey_service.hotkey_text)
@@ -119,6 +124,7 @@ class AppController:
     def _connect_signals(self) -> None:
         self._clipboard_service.parsed_captured.connect(self._on_clipboard_parsed_captured)
         self._hotkey_service.hotkey_pressed.connect(self._on_hotkey_pressed)
+        self._window.window_shown.connect(self._on_window_shown)
 
         self._window.tab_selected.connect(self._on_tab_selected)
         self._window.tab_order_changed.connect(self._on_tab_order_changed)
@@ -141,6 +147,8 @@ class AppController:
         self._window.hotkey_change_requested.connect(self._on_hotkey_change_requested)
         self._window.hotkey_reset_requested.connect(self._on_hotkey_reset_requested)
         self._window.capture_tab_change_requested.connect(self._on_capture_tab_change_requested)
+        self._window.capture_tab_max_change_requested.connect(self._on_capture_tab_max_change_requested)
+        self._window.settings_save_requested.connect(self._on_settings_save_requested)
         self._window.note_color_change_requested.connect(self._on_note_color_change_requested)
         self._window.note_font_size_change_requested.connect(self._on_note_font_size_change_requested)
         self._window.pinned_color_change_requested.connect(self._on_pinned_color_change_requested)
@@ -811,7 +819,132 @@ class AppController:
         self._capture_tab_id = tab_id
         self._repository.set_setting("capture_tab_id", str(tab_id))
         self._window.set_capture_tab(tab_id, self._tab_name(tabs, tab_id))
+        self._window.set_capture_tab_max(self._repository.get_tab_capacity(tab_id))
         self._window.show_info(f"监听存储标签已设置为：{self._tab_name(tabs, tab_id)}")
+
+    def _on_settings_save_requested(self, payload) -> None:
+        from .ui.settings_dialog import SettingsPayload
+
+        if not isinstance(payload, SettingsPayload):
+            return
+        messages: list[str] = []
+
+        if payload.hotkey and payload.hotkey != self._hotkey_service.hotkey_text:
+            normalized, error = HotkeyService.normalize_hotkey(payload.hotkey)
+            if error or not normalized:
+                messages.append(f"快捷键无效：{error or '未知错误'}（未修改）")
+            else:
+                ok, start_error = self._hotkey_service.update_hotkey(normalized)
+                if ok:
+                    self._repository.set_setting("hotkey", normalized)
+                    self._window.set_hotkey_text(normalized)
+                    messages.append(f"全局快捷键已更新为 {normalized}")
+                else:
+                    messages.append(
+                        f"应用快捷键失败：{start_error or '未知错误'}（已回滚）"
+                    )
+
+        if payload.capture_tab_id is not None and payload.capture_tab_id != self._capture_tab_id:
+            tabs = self._repository.list_tabs()
+            if payload.capture_tab_id in {tab.id for tab in tabs}:
+                self._capture_tab_id = payload.capture_tab_id
+                self._repository.set_setting("capture_tab_id", str(payload.capture_tab_id))
+                self._window.set_capture_tab(
+                    payload.capture_tab_id,
+                    self._tab_name(tabs, payload.capture_tab_id),
+                )
+                messages.append(
+                    f"监听存储标签已设置为：{self._tab_name(tabs, payload.capture_tab_id)}"
+                )
+            else:
+                messages.append("监听存储标签无效（未修改）")
+
+        if self._capture_tab_id is not None and payload.capture_tab_max > 0:
+            old_value = self._repository.get_tab_capacity(self._capture_tab_id)
+            safe_value = max(50, min(5000, int(payload.capture_tab_max)))
+            if safe_value != old_value:
+                self._repository.set_tab_capacity(self._capture_tab_id, safe_value)
+                self._save_tab_capacities()
+                self._window.set_capture_tab_max(safe_value)
+                deleted = self._repository.enforce_tab_capacity_now(self._capture_tab_id)
+                if deleted > 0:
+                    self._invalidate_items_cache(self._capture_tab_id)
+                    self._refresh_items(self._window.current_tab_id())
+                    messages.append(
+                        f"监听标签条目上限已设为 {safe_value}，删除了 {deleted} 条超出上限的旧条目"
+                    )
+                else:
+                    messages.append(f"监听标签条目上限已设为 {safe_value}")
+
+        if payload.autostart != self._autostart_service.is_enabled():
+            error = self._autostart_service.set_enabled(payload.autostart)
+            if error:
+                messages.append(f"设置开机自启失败：{error}（未修改）")
+            else:
+                self._window.set_autostart_state(payload.autostart)
+                messages.append(
+                    "已开启开机自启动" if payload.autostart else "已关闭开机自启动"
+                )
+
+        self._on_appearance_change_requested(payload.appearance)
+
+        if payload.note_color != (self._repository.get_setting("note_text_color") or "#1f2937"):
+            self._on_note_color_change_requested(payload.note_color)
+            messages.append(f"备注文字颜色已更新为 {payload.note_color}")
+        note_font_size = self._parse_int_setting("note_font_size") or 13
+        if payload.note_font_size != note_font_size:
+            self._on_note_font_size_change_requested(payload.note_font_size)
+            messages.append(f"备注文字大小已更新为 {payload.note_font_size}px")
+        if payload.pinned_color != (self._repository.get_setting("pinned_accent_color") or ""):
+            self._on_pinned_color_change_requested(payload.pinned_color)
+            messages.append(f"置顶颜色已更新为 {payload.pinned_color}")
+
+        if messages:
+            self._window.show_info("设置已保存：\n" + "\n".join(messages))
+
+    def _load_tab_capacities(self) -> None:
+        raw = self._repository.get_setting("tab_capacity_overrides") or ""
+        if not raw.strip():
+            return
+        try:
+            data = json.loads(raw)
+        except (TypeError, ValueError):
+            return
+        if not isinstance(data, dict):
+            return
+        for tab_id_text, value in data.items():
+            try:
+                tab_id = int(tab_id_text)
+                max_items = int(value)
+            except (TypeError, ValueError):
+                continue
+            if max_items > 0:
+                self._repository.set_tab_capacity(tab_id, max_items)
+
+    def _save_tab_capacities(self) -> None:
+        overrides = getattr(self._repository, "_tab_capacity_overrides", {})
+        data = {str(tab_id): int(value) for tab_id, value in overrides.items()}
+        self._repository.set_setting("tab_capacity_overrides", json.dumps(data))
+
+    def _on_capture_tab_max_change_requested(self, max_items: int) -> None:
+        if self._capture_tab_id is None:
+            self._window.show_error("当前没有可用的监听存储标签。")
+            return
+        safe_value = max(50, min(5000, int(max_items)))
+        tab_id = self._capture_tab_id
+        old_value = self._repository.get_tab_capacity(tab_id)
+        self._repository.set_tab_capacity(tab_id, safe_value)
+        self._save_tab_capacities()
+        self._window.set_capture_tab_max(safe_value)
+        deleted = self._repository.enforce_tab_capacity_now(tab_id)
+        if deleted > 0:
+            self._invalidate_items_cache(tab_id)
+            self._refresh_items(self._window.current_tab_id())
+            self._window.show_info(
+                f"监听标签条目上限已设置为 {safe_value}，删除了 {deleted} 条超出上限的旧条目。"
+            )
+        elif safe_value != old_value:
+            self._window.show_info(f"监听标签条目上限已设置为 {safe_value}。")
 
     def _on_note_color_change_requested(self, color_hex: str) -> None:
         self._repository.set_setting("note_text_color", color_hex)
@@ -906,6 +1039,15 @@ class AppController:
         self._window.set_capture_tab(self._capture_tab_id, self._tab_name(tabs, self._capture_tab_id))
 
     def _refresh_items(self, tab_id: Optional[int]) -> None:
+        if not self._window.isVisible():
+            self._pending_items_refresh = True
+            self._pending_items_refresh_tab = tab_id
+            logger.debug(
+                "[UI] refresh_items deferred (window hidden) tab_id=%s search_mode=%s",
+                tab_id,
+                bool(self._search_query),
+            )
+            return
         logger.debug(
             "[UI] refresh_items enter tab_id=%s search_mode=%s query=%s",
             tab_id,
@@ -958,6 +1100,15 @@ class AppController:
                 tab_id,
                 bool(self._search_query),
             )
+
+    def _on_window_shown(self) -> None:
+        if not self._pending_items_refresh:
+            return
+        self._pending_items_refresh = False
+        tab_id = self._pending_items_refresh_tab
+        self._pending_items_refresh_tab = None
+        logger.debug("[UI] window shown, applying deferred refresh tab_id=%s", tab_id)
+        self._refresh_items(tab_id)
 
     def _invalidate_items_cache(self, tab_id: Optional[int] = None) -> None:
         if tab_id is None:

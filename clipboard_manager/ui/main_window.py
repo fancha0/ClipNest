@@ -32,6 +32,7 @@ from PySide6.QtGui import (
     QKeySequence,
     QPainter,
     QPixmap,
+    QShowEvent,
     QShortcut,
     QTextDocument,
     QTextImageFormat,
@@ -70,8 +71,9 @@ from PySide6.QtWidgets import (
 )
 
 from ..models import ClipItem, Tab
-from ..config import APP_NAME
+from ..config import APP_NAME, MAX_ITEMS_PER_TAB
 from ..icon_utils import resolve_app_icon
+from .settings_dialog import SettingsDialog
 from .item_presenter import present_item
 from .item_delegate import ClipItemDelegate
 from .theme import (
@@ -1466,6 +1468,7 @@ class MainWindow(QMainWindow):
     hotkey_change_requested = Signal(str)
     hotkey_reset_requested = Signal()
     capture_tab_change_requested = Signal(int)
+    capture_tab_max_change_requested = Signal(int)
     note_color_change_requested = Signal(str)
     note_font_size_change_requested = Signal(int)
     pinned_color_change_requested = Signal(str)
@@ -1479,6 +1482,8 @@ class MainWindow(QMainWindow):
     start_inline_edit_requested = Signal(int)
     save_inline_edit_requested = Signal(int, object)
     autostart_change_requested = Signal(bool)
+    window_shown = Signal()
+    settings_save_requested = Signal(object)
 
     def __init__(self) -> None:
         super().__init__()
@@ -1488,6 +1493,8 @@ class MainWindow(QMainWindow):
         self._hotkey_text = ""
         self._capture_tab_text = "未设置"
         self._capture_tab_id: Optional[int] = None
+        self._capture_tab_max: int = MAX_ITEMS_PER_TAB
+        self._autostart_enabled = False
         self._note_text_color = "#1f2937"
         self._note_font_size = 13
         self._pinned_accent_color = "#1fb8cb"
@@ -1514,6 +1521,7 @@ class MainWindow(QMainWindow):
         self._pending_render_file_icon_provider: Optional[QFileIconProvider] = None
         self._pending_render_started_at = 0.0
         self._pending_render_first_batch_logged = False
+        self._thumb_icon_cache: dict[str, QIcon] = {}
         self._item_render_timer = QTimer(self)
         self._item_render_timer.setSingleShot(True)
         self._item_render_timer.timeout.connect(self._render_next_item_batch)
@@ -1716,66 +1724,34 @@ class MainWindow(QMainWindow):
     def _build_settings_menu(self) -> None:
         self.settings_menu = QMenu(self)
         self.settings_menu.setObjectName("glassMenu")
-        self.action_current_hotkey = QAction("当前快捷键：未设置", self)
-        self.action_current_hotkey.setEnabled(False)
-        self.action_capture_tab = QAction(f"监听存储标签：{self._capture_tab_text}", self)
-        self.action_capture_tab.setEnabled(False)
-        self.action_note_style = QAction("备注样式：#1f2937 / 13px", self)
-        self.action_note_style.setEnabled(False)
-        self.action_pinned_style = QAction("置顶颜色：#1FB8CB", self)
-        self.action_pinned_style.setEnabled(False)
-        self.action_set_hotkey = QAction("设置全局快捷键...", self)
-        self.action_set_capture_tab = QAction("设置监听存储标签...", self)
-        self.action_set_note_color = QAction("设置备注文字颜色...", self)
-        self.action_set_note_font_size = QAction("设置备注文字大小...", self)
-        self.action_set_pinned_color = QAction("设置置顶颜色...", self)
-        self.action_export_data = QAction("导出标签页与条目...", self)
-        self.action_import_data = QAction("导入标签页与条目...", self)
-        self.action_reset_hotkey = QAction("恢复默认快捷键", self)
-        self.action_autostart = QAction("开机自启动", self)
-        self.action_autostart.setCheckable(True)
-        self.action_autostart.setChecked(False)
-
-        self.settings_menu.addAction(self.action_current_hotkey)
-        self.settings_menu.addAction(self.action_capture_tab)
-        self.settings_menu.addAction(self.action_note_style)
-        self.settings_menu.addAction(self.action_pinned_style)
-        self.settings_menu.addSeparator()
-        self.settings_menu.addAction(self.action_set_hotkey)
-        self.settings_menu.addAction(self.action_set_capture_tab)
-        self.settings_menu.addAction(self.action_set_note_color)
-        self.settings_menu.addAction(self.action_set_note_font_size)
-        self.settings_menu.addAction(self.action_set_pinned_color)
-        self.settings_menu.addSeparator()
-        self.settings_menu.addAction(self.action_export_data)
-        self.settings_menu.addAction(self.action_import_data)
-        self.settings_menu.addSeparator()
-        self.settings_menu.addAction(self.action_autostart)
-        self.settings_menu.addSeparator()
-        self.settings_menu.addAction(self.action_reset_hotkey)
         self.settings_menu.setStyleSheet(self._menu_stylesheet())
-        self.settings_button.clicked.connect(self._show_settings_menu)
-
-        self.action_set_hotkey.triggered.connect(self._prompt_hotkey_dialog)
-        self.action_set_capture_tab.triggered.connect(self._prompt_capture_tab_dialog)
-        self.action_set_note_color.triggered.connect(self._prompt_note_color_dialog)
-        self.action_set_note_font_size.triggered.connect(self._prompt_note_font_size_dialog)
-        self.action_set_pinned_color.triggered.connect(self._prompt_pinned_color_dialog)
-        self.action_export_data.triggered.connect(self.export_requested.emit)
-        self.action_import_data.triggered.connect(self.import_requested.emit)
-        self.action_reset_hotkey.triggered.connect(self.hotkey_reset_requested.emit)
-        self.action_autostart.triggered.connect(self._on_autostart_toggled)
+        self.settings_button.clicked.connect(self._open_settings_dialog)
 
     def set_autostart_state(self, enabled: bool) -> None:
-        self.action_autostart.setChecked(enabled)
+        self._autostart_enabled = bool(enabled)
 
-    def _on_autostart_toggled(self, checked: bool) -> None:
-        self.autostart_change_requested.emit(checked)
-
-    def _show_settings_menu(self) -> None:
-        button_pos = self.settings_button.mapToGlobal(self.settings_button.rect().bottomLeft())
-        with self._with_auto_hide_suspended():
-            self.settings_menu.exec(button_pos)
+    def _open_settings_dialog(self) -> None:
+        dialog = SettingsDialog(
+            self,
+            hotkey=self._hotkey_text,
+            capture_tab_id=self._capture_tab_id,
+            capture_tab_max=self._capture_tab_max,
+            autostart=self._autostart_enabled,
+            appearance=self._appearance,
+            note_color=self._note_text_color,
+            note_font_size=self._note_font_size,
+            pinned_color=self._pinned_accent_color,
+            tabs=[(tab.id, tab.name) for tab in self._tabs_snapshot],
+        )
+        if self._exec_modal_dialog(dialog) != QDialog.DialogCode.Accepted:
+            return
+        if dialog.export_requested():
+            self.export_requested.emit()
+            return
+        if dialog.import_requested():
+            self.import_requested.emit()
+            return
+        self.settings_save_requested.emit(dialog.result_payload())
 
     def set_tabs(self, tabs: list[Tab], active_tab_id: Optional[int]) -> None:
         self._tabs_snapshot = list(tabs)
@@ -1901,6 +1877,20 @@ class MainWindow(QMainWindow):
             elapsed_ms,
         )
 
+    def _cached_thumb_icon(self, thumb_blob: bytes) -> Optional[QIcon]:
+        key = hashlib.sha256(thumb_blob).hexdigest()
+        icon = self._thumb_icon_cache.get(key)
+        if icon is not None:
+            return icon
+        pixmap = QPixmap()
+        if not pixmap.loadFromData(thumb_blob, "PNG"):
+            return None
+        icon = QIcon(pixmap)
+        if len(self._thumb_icon_cache) >= 512:
+            self._thumb_icon_cache.clear()
+        self._thumb_icon_cache[key] = icon
+        return icon
+
     def _create_list_item(
         self,
         item: ClipItem,
@@ -1935,9 +1925,7 @@ class MainWindow(QMainWindow):
 
         icon: QIcon | None = None
         if row.icon_kind == "image" and item.thumb_blob:
-            pixmap = QPixmap()
-            if pixmap.loadFromData(item.thumb_blob, "PNG"):
-                icon = QIcon(pixmap)
+            icon = self._cached_thumb_icon(item.thumb_blob)
         elif row.icon_kind == "file" and row.file_icon_path:
             provider = file_icon_provider or QFileIconProvider()
             file_icon = provider.icon(QFileInfo(row.file_icon_path))
@@ -2015,12 +2003,13 @@ class MainWindow(QMainWindow):
 
     def set_hotkey_text(self, hotkey_text: str) -> None:
         self._hotkey_text = hotkey_text
-        self.action_current_hotkey.setText(f"当前快捷键：{hotkey_text}")
 
     def set_capture_tab(self, capture_tab_id: Optional[int], capture_tab_text: str) -> None:
         self._capture_tab_id = capture_tab_id
         self._capture_tab_text = capture_tab_text
-        self.action_capture_tab.setText(f"监听存储标签：{capture_tab_text}")
+
+    def set_capture_tab_max(self, max_items: int) -> None:
+        self._capture_tab_max = int(max_items)
 
     def current_appearance(self) -> AppearanceSettings:
         return self._appearance
@@ -2037,7 +2026,6 @@ class MainWindow(QMainWindow):
     def set_note_style(self, color_hex: str, font_size: int) -> None:
         self._note_text_color = color_hex
         self._note_font_size = font_size
-        self.action_note_style.setText(f"备注样式：{color_hex} / {font_size}px")
         if self._item_delegate is not None:
             self._item_delegate.set_note_style(color_hex, font_size)
         self.item_list.doItemsLayout()
@@ -2049,7 +2037,6 @@ class MainWindow(QMainWindow):
         if not color.isValid():
             color = QColor("#1fb8cb")
         self._pinned_accent_color = color.name()
-        self.action_pinned_style.setText(f"置顶颜色：{self._pinned_accent_color.upper()}")
         if self._item_delegate is not None:
             self._item_delegate.set_pinned_color(self._pinned_accent_color)
         self.item_list.viewport().update()
@@ -2187,6 +2174,10 @@ class MainWindow(QMainWindow):
 
     def should_hide_on_hotkey(self) -> bool:
         return self.isVisible() and not bool(self.windowState() & Qt.WindowState.WindowMinimized)
+
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        self.window_shown.emit()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self._allow_close or self._tray_icon is None or not self._tray_icon.isVisible():
@@ -2455,116 +2446,6 @@ class MainWindow(QMainWindow):
             self.add_mixed_item_requested.emit(dialog.result_segments(), note)
         elif text.strip():
             self.add_item_requested.emit(text)
-
-    def _prompt_capture_tab_dialog(self) -> None:
-        if not self._tabs_snapshot:
-            self.show_error("当前没有可用标签页。")
-            return
-        tab_names = [tab.name for tab in self._tabs_snapshot]
-        current_idx = 0
-        for idx, tab in enumerate(self._tabs_snapshot):
-            if tab.id == self._capture_tab_id:
-                current_idx = idx
-                break
-        with self._with_auto_hide_suspended():
-            selected_name, ok = QInputDialog.getItem(
-                self,
-                "设置监听存储标签",
-                "自动监听内容将保存到：",
-                tab_names,
-                current_idx,
-                False,
-            )
-        if not ok:
-            return
-        for tab in self._tabs_snapshot:
-            if tab.name == selected_name:
-                self.capture_tab_change_requested.emit(tab.id)
-                return
-
-    def _prompt_note_color_dialog(self) -> None:
-        with self._with_auto_hide_suspended():
-            color = QColorDialog.getColor(
-                QColor(self._note_text_color),
-                self,
-                "设置备注文字颜色",
-            )
-        if not color.isValid():
-            return
-        self.note_color_change_requested.emit(color.name())
-
-    def _prompt_pinned_color_dialog(self) -> None:
-        with self._with_auto_hide_suspended():
-            color = QColorDialog.getColor(
-                QColor(self._pinned_accent_color),
-                self,
-                "设置置顶颜色",
-            )
-        if not color.isValid():
-            return
-        self.pinned_color_change_requested.emit(color.name())
-    def _prompt_note_font_size_dialog(self) -> None:
-        with self._with_auto_hide_suspended():
-            value, ok = QInputDialog.getInt(
-                self,
-                "设置备注文字大小",
-                "字号（px）：",
-                self._note_font_size,
-                10,
-                28,
-                1,
-            )
-        if not ok:
-            return
-        self.note_font_size_change_requested.emit(value)
-
-    def _prompt_appearance_dialog(self) -> None:
-        dialog = AppearanceDialog(
-            self,
-            current=self._appearance,
-            defaults=default_appearance_settings(),
-        )
-        if self._exec_modal_dialog(dialog) != QDialog.DialogCode.Accepted:
-            return
-        self.appearance_change_requested.emit(dialog.result_appearance())
-
-    def _prompt_hotkey_dialog(self) -> None:
-        dialog = QDialog(self)
-        dialog.setWindowTitle("设置全局快捷键")
-        dialog.setModal(True)
-        dialog_layout = QVBoxLayout(dialog)
-
-        tip = QLabel("请按下新的全局快捷键组合（例如 Ctrl+Shift+V）：")
-        tip.setWordWrap(True)
-        dialog_layout.addWidget(tip)
-
-        key_edit = QKeySequenceEdit(dialog)
-        key_edit.setMaximumSequenceLength(1)
-        if self._hotkey_text:
-            key_edit.setKeySequence(QKeySequence(self._hotkey_text))
-        dialog_layout.addWidget(key_edit)
-
-        hint = QLabel("要求：至少一个修饰键 + 一个主键。")
-        hint.setStyleSheet("color: #555;")
-        dialog_layout.addWidget(hint)
-
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        ok_btn = buttons.button(QDialogButtonBox.StandardButton.Ok)
-        if ok_btn is not None:
-            ok_btn.setText("确定")
-        cancel_btn = buttons.button(QDialogButtonBox.StandardButton.Cancel)
-        if cancel_btn is not None:
-            cancel_btn.setText("取消")
-        buttons.accepted.connect(dialog.accept)
-        buttons.rejected.connect(dialog.reject)
-        dialog_layout.addWidget(buttons)
-
-        if self._exec_modal_dialog(dialog) != QDialog.DialogCode.Accepted:
-            return
-        seq = key_edit.keySequence().toString(QKeySequence.SequenceFormat.PortableText)
-        self.hotkey_change_requested.emit(seq)
 
     def prompt_select_local_tabs_for_export(
         self,
