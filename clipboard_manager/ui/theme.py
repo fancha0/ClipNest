@@ -520,11 +520,16 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
             color: #ffffff;
             border-color: rgba(36, 156, 211, 170);
             font-weight: 600;
-            min-height: 30px;
+            min-height: 32px;
             padding: 5px 15px;
         }}
         QPushButton#primaryButton:hover {{
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #25bdae, stop:1 #2c94e8);
+        }}
+        QLineEdit#globalSearchInput {{
+            min-height: 34px;
+            padding: 0 10px;
+            border-radius: 12px;
         }}
         QToolButton {{
             background: {tokens.tool_button_bg};

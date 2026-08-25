@@ -31,6 +31,7 @@ from PySide6.QtGui import (
     QImage,
     QKeySequence,
     QPainter,
+    QPen,
     QPixmap,
     QShowEvent,
     QShortcut,
@@ -190,7 +191,29 @@ class ReorderableItemListWidget(DragAutoScrollListWidget):
         super().__init__(parent)
         self._reorder_enabled = True
         self._drag_source_row: Optional[int] = None
+        self._empty_hint = ""
         self.set_reorder_enabled(True)
+
+    def set_empty_hint(self, text: str) -> None:
+        self._empty_hint = (text or "").strip()
+        self.viewport().update()
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        if self.count() > 0 or not self._empty_hint:
+            return
+        painter = QPainter(self.viewport())
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        color = self.palette().color(self.foregroundRole())
+        color.setAlpha(145)
+        painter.setPen(color)
+        text_rect = self.viewport().rect().adjusted(12, 12, -12, -12)
+        painter.drawText(
+            text_rect,
+            int(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter | Qt.TextFlag.TextWordWrap),
+            self._empty_hint,
+        )
+        painter.end()
 
     def set_reorder_enabled(self, enabled: bool) -> None:
         self._reorder_enabled = bool(enabled)
@@ -431,6 +454,21 @@ class BundleImageInputList(ImageMimeMixin, QListWidget):
                 images.append(payload)
 
         return images
+
+
+def _create_search_icon() -> QIcon:
+    pixmap = QPixmap(18, 18)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    pen = QPen(QColor("#7A8699"))
+    pen.setWidthF(1.6)
+    painter.setPen(pen)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.drawEllipse(4, 4, 8, 8)
+    painter.drawLine(11.5, 11.5, 15.0, 15.0)
+    painter.end()
+    return QIcon(pixmap)
 
 
 def _encode_qimage_to_payload(image: QImage, mime_type: str = "image/png") -> Optional[dict[str, Any]]:
@@ -1268,25 +1306,24 @@ class MainWindow(QMainWindow):
 
         tools = QHBoxLayout()
         tools.setSpacing(6)
-        self.add_item_btn = QPushButton("新建条目")
+        self.add_item_btn = QPushButton("＋ 新建条目")
         self.add_item_btn.setObjectName("primaryButton")
+        self.add_item_btn.setToolTip("新建条目（Ctrl+N）")
         self.search_input = QLineEdit(self)
         self.search_input.setObjectName("globalSearchInput")
-        self.search_input.setPlaceholderText("搜索全部条目...")
-        self.search_input.setClearButtonEnabled(False)
-        self.search_input.setMinimumWidth(280)
-        self.clear_search_btn = QPushButton("清空", self)
-        self.clear_search_btn.setObjectName("secondaryButton")
-        self.clear_search_btn.setVisible(False)
+        self.search_input.setPlaceholderText("搜索全部条目...（Ctrl+F）")
+        self.search_input.setClearButtonEnabled(True)
+        search_icon_action = QAction(self)
+        search_icon_action.setIcon(_create_search_icon())
+        search_icon_action.setToolTip("搜索全部条目（Ctrl+F）")
+        self.search_input.addAction(search_icon_action, QLineEdit.ActionPosition.LeadingPosition)
         self.settings_button = QToolButton()
         self.settings_button.setObjectName("settingsButton")
         self.settings_button.setText("⚙")
         self.settings_button.setToolTip("设置")
-        self.settings_button.setFixedSize(QSize(38, 32))
+        self.settings_button.setFixedSize(QSize(38, 34))
         tools.addWidget(self.add_item_btn)
         tools.addWidget(self.search_input, 1)
-        tools.addWidget(self.clear_search_btn)
-        tools.addStretch(1)
         tools.addWidget(self.settings_button)
         right_layout.addLayout(tools)
 
@@ -1353,7 +1390,12 @@ class MainWindow(QMainWindow):
         self.tab_list.customContextMenuRequested.connect(self._open_tab_context_menu)
         self.add_item_btn.clicked.connect(self._prompt_add_item)
         self.search_input.textChanged.connect(self._on_search_input_changed)
-        self.clear_search_btn.clicked.connect(self._clear_search)
+
+        self._focus_search_shortcut = QShortcut(QKeySequence("Ctrl+F"), self)
+        self._focus_search_shortcut.activated.connect(self._focus_search_input)
+        self._new_item_shortcut = QShortcut(QKeySequence("Ctrl+N"), self)
+        self._new_item_shortcut.activated.connect(self._prompt_add_item)
+        self.search_input.installEventFilter(self)
         self.item_list.itemClicked.connect(self._on_item_clicked)
         self.item_list.currentItemChanged.connect(self._on_item_current_changed)
         self.item_list.customContextMenuRequested.connect(self._open_item_context_menu)
@@ -1437,6 +1479,17 @@ class MainWindow(QMainWindow):
         self.item_list.set_reorder_enabled(False if len(items) > 50 else drag_enabled)
         self._suppress_item_reorder_emit = True
         self.item_list.clear()
+        query = self.search_input.text().strip()
+        if search_mode and query:
+            if items:
+                self.item_list.set_empty_hint("")
+                self.search_input.setPlaceholderText(f"搜索全部条目...（找到 {len(items)} 条，Ctrl+F 聚焦 / ESC 退出）")
+            else:
+                self.item_list.set_empty_hint(f"没有找到匹配“{query}”的条目\n换个关键词试试")
+                self.search_input.setPlaceholderText("搜索全部条目...（无匹配结果，ESC 退出）")
+        else:
+            self.item_list.set_empty_hint("")
+            self.search_input.setPlaceholderText("搜索全部条目...（Ctrl+F）")
         self._pending_render_items = list(items)
         self._pending_render_index = 0
         self._pending_render_search_mode = bool(search_mode)
@@ -1599,9 +1652,11 @@ class MainWindow(QMainWindow):
         lw_item = self._create_list_item(item, search_mode=False)
         self.item_list.insertItem(0, lw_item)
 
+    def _focus_search_input(self) -> None:
+        self.search_input.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        self.search_input.selectAll()
+
     def _on_search_input_changed(self, _text: str) -> None:
-        has_text = self.search_input.text().strip() != ""
-        self.clear_search_btn.setVisible(has_text)
         self._search_debounce_timer.start()
 
     def _emit_search_text_changed(self) -> None:
@@ -1609,6 +1664,7 @@ class MainWindow(QMainWindow):
 
     def _clear_search(self) -> None:
         self.search_input.clear()
+        self.item_list.setFocus(Qt.FocusReason.ShortcutFocusReason)
 
     def _on_main_splitter_moved(self, _pos: int, _index: int) -> None:
         self._splitter_save_timer.start()
@@ -1845,6 +1901,14 @@ class MainWindow(QMainWindow):
         return super().event(event)
 
     def eventFilter(self, watched, event: QEvent) -> bool:
+        if watched is self.search_input and event.type() == QEvent.Type.KeyPress:
+            key = getattr(event, "key", None)
+            key_value = key() if callable(key) else None
+            if key_value == Qt.Key.Key_Escape:
+                if self.search_input.text():
+                    self.search_input.clear()
+                self.item_list.setFocus(Qt.FocusReason.ShortcutFocusReason)
+                return True
         if watched in (self.item_list, self.item_list.viewport()) and event.type() == QEvent.Type.KeyPress:
             key = getattr(event, "key", None)
             modifiers = getattr(event, "modifiers", None)
