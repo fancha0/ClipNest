@@ -173,20 +173,63 @@ def _type_label(content_type: str) -> str:
     return mapping.get(content_type, "条目")
 
 
-def _format_time(value: str) -> str:
+def _parse_stored_time(value: str) -> datetime | None:
+    """Parse a stored timestamp and convert it to local time.
+
+    Timestamps are persisted as UTC ISO strings, so they must be shifted to the
+    local zone before display; naive values are assumed to be local already.
+    """
     text = (value or "").strip()
     if not text:
-        return ""
+        return None
+    parsed: datetime | None = None
     try:
-        dt = datetime.fromisoformat(text)
-        return dt.strftime("%m-%d %H:%M")
+        parsed = datetime.fromisoformat(text)
     except ValueError:
-        pass
-    try:
-        dt = datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
-        return dt.strftime("%m-%d %H:%M")
-    except ValueError:
+        try:
+            parsed = datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return None
+    if parsed.tzinfo is not None:
+        return parsed.astimezone()
+    return parsed
+
+
+def _format_time(value: str, now: datetime | None = None) -> str:
+    dt = _parse_stored_time(value)
+    if dt is None:
+        text = (value or "").strip()
         return text[-16:] if len(text) > 16 else text
+
+    if now is None:
+        current = datetime.now(dt.tzinfo) if dt.tzinfo is not None else datetime.now()
+    else:
+        current = now
+    # Align awareness so the subtraction below never raises.
+    if dt.tzinfo is None and current.tzinfo is not None:
+        current = current.astimezone().replace(tzinfo=None)
+    elif dt.tzinfo is not None and current.tzinfo is None:
+        current = current.astimezone(dt.tzinfo)
+
+    delta_seconds = (current - dt).total_seconds()
+
+    # Future timestamps (clock skew) fall back to an absolute label.
+    if delta_seconds < -60:
+        return dt.strftime("%m-%d %H:%M")
+    if delta_seconds < 60:
+        return "刚刚"
+    if delta_seconds < 3600:
+        return f"{int(delta_seconds // 60)} 分钟前"
+
+    today = current.date()
+    item_date = dt.date()
+    if item_date == today:
+        return dt.strftime("今天 %H:%M")
+    if (today - item_date).days == 1:
+        return dt.strftime("昨天 %H:%M")
+    if item_date.year == today.year:
+        return dt.strftime("%m-%d %H:%M")
+    return dt.strftime("%Y-%m-%d %H:%M")
 
 
 def _compact_whitespace(text: str) -> str:
