@@ -6,7 +6,23 @@ from typing import Optional
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialog, QWidget
 
+from .titlebar_theme import apply_titlebar_theme
+
 _dialog_size_cache: dict[str, tuple[int, int]] = {}
+
+# Caption colors for dialogs, kept in sync with the app theme by set_dialog_titlebar_theme().
+_titlebar_state: dict[str, object] = {"dark": False, "caption": None, "text": None}
+
+
+def set_dialog_titlebar_theme(
+    dark: bool,
+    caption_hex: str | None = None,
+    text_hex: str | None = None,
+) -> None:
+    """Remember the caption style so every dialog opens with a themed title bar."""
+    _titlebar_state["dark"] = bool(dark)
+    _titlebar_state["caption"] = caption_hex
+    _titlebar_state["text"] = text_hex
 
 
 def get_dialog_size(key: str) -> tuple[int, int] | None:
@@ -64,6 +80,22 @@ class ResizableDialog(QDialog):
     def closeEvent(self, event) -> None:
         self._remember_size()
         super().closeEvent(event)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._apply_titlebar_theme()
+
+    def _apply_titlebar_theme(self) -> None:
+        try:
+            hwnd = int(self.winId())
+        except Exception:
+            return
+        apply_titlebar_theme(
+            hwnd,
+            dark=bool(_titlebar_state.get("dark")),
+            caption_hex=_titlebar_state.get("caption"),  # type: ignore[arg-type]
+            text_hex=_titlebar_state.get("text"),  # type: ignore[arg-type]
+        )
 
     def done(self, result: int) -> None:
         self._remember_size()

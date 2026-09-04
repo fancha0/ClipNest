@@ -80,5 +80,85 @@ class HotkeyServiceTests(unittest.TestCase):
         self.assertEqual(service.hotkey_text, "Ctrl+Shift+V")
 
 
+class _FakeHotKey:
+    """Mimics pynput.keyboard.HotKey's internal pressed-key set."""
+
+    def __init__(self, state: set[str]) -> None:
+        self._state = set(state)
+
+
+class HotkeyPhantomTriggerTests(unittest.TestCase):
+    """Lost key-release events (lock screen / sleep) leave stale state in
+    pynput, so an unrelated keypress can complete the combination."""
+
+    def _service_with_state(self, state: set[str]) -> tuple[HotkeyService, _FakeHotKey]:
+        service = HotkeyService("Ctrl+Shift+V")
+        hotkey = _FakeHotKey(state)
+        listener = mock.Mock()
+        listener._hotkeys = [hotkey]
+        service._listener = listener
+        return service, hotkey
+
+    def test_required_modifiers_parsed(self) -> None:
+        self.assertEqual(HotkeyService("Ctrl+Shift+V").required_modifiers(), ["Ctrl", "Shift"])
+        self.assertEqual(HotkeyService("Alt+F8").required_modifiers(), ["Alt"])
+        self.assertEqual(HotkeyService("Win+V").required_modifiers(), ["Win"])
+
+    def test_trigger_emits_when_modifiers_physically_held(self) -> None:
+        service, _ = self._service_with_state({"shift", "v"})
+        received: list[int] = []
+        service.hotkey_pressed.connect(lambda: received.append(1))
+
+        with mock.patch.object(service, "_physical_modifiers_held", return_value=True):
+            service._on_hotkey_triggered()
+
+        self.assertEqual(len(received), 1)
+
+    def test_phantom_trigger_is_ignored_and_state_cleared(self) -> None:
+        service, hotkey = self._service_with_state({"shift", "v"})
+        received: list[int] = []
+        service.hotkey_pressed.connect(lambda: received.append(1))
+
+        with mock.patch.object(service, "_physical_modifiers_held", return_value=False):
+            service._on_hotkey_triggered()
+
+        self.assertEqual(received, [], "phantom trigger must not emit hotkey_pressed")
+        self.assertEqual(hotkey._state, set(), "stale listener state must be cleared")
+
+    def test_self_heal_clears_state_when_no_modifier_held(self) -> None:
+        service, hotkey = self._service_with_state({"shift", "v"})
+
+        with mock.patch.object(service, "_any_required_modifier_held", return_value=False):
+            service._self_heal_stale_state()
+
+        self.assertEqual(hotkey._state, set())
+
+    def test_self_heal_keeps_state_while_modifier_held(self) -> None:
+        service, hotkey = self._service_with_state({"shift", "v"})
+
+        with mock.patch.object(service, "_any_required_modifier_held", return_value=True):
+            service._self_heal_stale_state()
+
+        self.assertEqual(hotkey._state, {"shift", "v"}, "must not clear during real key hold")
+
+    def test_self_heal_noop_without_listener(self) -> None:
+        service = HotkeyService("Ctrl+Shift+V")
+        service._listener = None
+        service._self_heal_stale_state()  # must not raise
+
+    def test_clear_listener_state_tolerates_missing_attributes(self) -> None:
+        service = HotkeyService("Ctrl+Shift+V")
+        listener = mock.Mock(spec=[])
+        service._listener = listener
+        service._clear_listener_state()  # no _hotkeys attribute; must not raise
+
+    def test_stop_stops_self_heal_timer(self) -> None:
+        service = HotkeyService("Ctrl+Shift+V")
+        service._listener = mock.Mock()
+        service._self_heal_timer.start()
+        service.stop()
+        self.assertFalse(service._self_heal_timer.isActive())
+
+
 if __name__ == "__main__":
     unittest.main()

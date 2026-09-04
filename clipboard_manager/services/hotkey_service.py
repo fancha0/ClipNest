@@ -5,20 +5,36 @@ import re
 import sys
 from typing import Optional
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, QTimer, Signal
 from pynput import keyboard
 
 logger = logging.getLogger(__name__)
 
+# Virtual-key codes used to verify the real keyboard state on Windows.
+_VK_BY_MODIFIER = {
+    "Ctrl": 0x11,   # VK_CONTROL
+    "Alt": 0x12,    # VK_MENU
+    "Shift": 0x10,  # VK_SHIFT
+    "Win": 0x5B,    # VK_LWIN (right Win handled separately)
+}
+_VK_RWIN = 0x5C
+
 
 class HotkeyService(QObject):
     hotkey_pressed = Signal()
+
+    # How often to clear stale pynput hotkey state (ms). Guards against lost
+    # key-release events after lock screen / sleep / session switch.
+    SELF_HEAL_INTERVAL_MS = 3000
 
     def __init__(self, hotkey_text: str) -> None:
         super().__init__()
         self.hotkey_text = hotkey_text
         self._listener: Optional[keyboard.GlobalHotKeys] = None
         self.last_error: Optional[str] = None
+        self._self_heal_timer = QTimer(self)
+        self._self_heal_timer.setInterval(self.SELF_HEAL_INTERVAL_MS)
+        self._self_heal_timer.timeout.connect(self._self_heal_stale_state)
 
     def start(self) -> bool:
         if self._listener is not None:
@@ -36,6 +52,7 @@ class HotkeyService(QObject):
             self._listener = keyboard.GlobalHotKeys({combo: self._on_hotkey_triggered})
             self._listener.start()
             self.last_error = None
+            self._self_heal_timer.start()
             logger.info("[Hotkey] register shortcut = %s (%s) success", self.hotkey_text, combo)
             return True
         except Exception as exc:
@@ -45,6 +62,7 @@ class HotkeyService(QObject):
             return False
 
     def stop(self) -> None:
+        self._self_heal_timer.stop()
         if self._listener is None:
             return
         logger.info("[Hotkey] unregister shortcut = %s", self.hotkey_text)
@@ -79,8 +97,109 @@ class HotkeyService(QObject):
         return self.update_hotkey_registration(new_hotkey)
 
     def _on_hotkey_triggered(self) -> None:
+        if not self._physical_modifiers_held():
+            logger.warning(
+                "[Hotkey] ignored phantom trigger for %s (modifiers not physically held); "
+                "clearing stale listener state",
+                self.hotkey_text,
+            )
+            self._clear_listener_state()
+            return
         logger.info("[Hotkey] triggered by %s", self.hotkey_text)
         self.hotkey_pressed.emit()
+
+    def required_modifiers(self) -> list[str]:
+        """Modifier names required by the configured hotkey (e.g. ['Ctrl', 'Shift'])."""
+        normalized, error = self.normalize_hotkey(self.hotkey_text)
+        if error or not normalized:
+            return []
+        parts = [part.strip() for part in normalized.split("+") if part.strip()]
+        return [part for part in parts if part in _VK_BY_MODIFIER]
+
+    def _physical_modifiers_held(self) -> bool:
+        """True when every required modifier is really pressed on the keyboard.
+
+        pynput tracks hotkey state itself, so a lost key-release event (lock
+        screen, sleep, session switch) can leave keys stuck in its state and
+        make an unrelated keypress complete the combination. Verifying the real
+        keyboard state blocks those phantom activations.
+        """
+        if sys.platform != "win32":
+            return True
+        modifiers = self.required_modifiers()
+        if not modifiers:
+            return True
+        try:
+            import ctypes
+
+            get_state = ctypes.windll.user32.GetAsyncKeyState
+        except Exception:
+            return True
+
+        def pressed(vk: int) -> bool:
+            # High-order bit set means the key is currently down.
+            return bool(get_state(vk) & 0x8000)
+
+        for name in modifiers:
+            if name == "Win":
+                if not (pressed(_VK_BY_MODIFIER["Win"]) or pressed(_VK_RWIN)):
+                    return False
+                continue
+            if not pressed(_VK_BY_MODIFIER[name]):
+                return False
+        return True
+
+    def _clear_listener_state(self) -> None:
+        """Drop pynput's internal pressed-key set so stale keys stop counting."""
+        listener = self._listener
+        if listener is None:
+            return
+        hotkeys = getattr(listener, "_hotkeys", None)
+        if not hotkeys:
+            return
+        for hotkey in hotkeys:
+            state = getattr(hotkey, "_state", None)
+            if state is not None:
+                state.clear()
+
+    def _self_heal_stale_state(self) -> None:
+        """Periodically clear stale state when no required modifier is held."""
+        if self._listener is None:
+            return
+        hotkeys = getattr(self._listener, "_hotkeys", None)
+        if not hotkeys:
+            return
+        if not any(getattr(hotkey, "_state", None) for hotkey in hotkeys):
+            return
+        if self._any_required_modifier_held():
+            return
+        logger.info("[Hotkey] self-heal cleared stale listener state for %s", self.hotkey_text)
+        self._clear_listener_state()
+
+    def _any_required_modifier_held(self) -> bool:
+        if sys.platform != "win32":
+            return True
+        modifiers = self.required_modifiers()
+        if not modifiers:
+            return True
+        try:
+            import ctypes
+
+            get_state = ctypes.windll.user32.GetAsyncKeyState
+        except Exception:
+            return True
+
+        def pressed(vk: int) -> bool:
+            return bool(get_state(vk) & 0x8000)
+
+        for name in modifiers:
+            if name == "Win":
+                if pressed(_VK_BY_MODIFIER["Win"]) or pressed(_VK_RWIN):
+                    return True
+                continue
+            if pressed(_VK_BY_MODIFIER[name]):
+                return True
+        return False
 
     @classmethod
     def _build_and_validate_combo(cls, hotkey_text: str) -> tuple[Optional[str], Optional[str]]:

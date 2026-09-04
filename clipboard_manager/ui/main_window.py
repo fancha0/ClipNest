@@ -69,9 +69,10 @@ from ..models import ClipItem, Tab
 from ..config import APP_NAME, MAX_ITEMS_PER_TAB
 from ..icon_utils import resolve_app_icon
 from .settings_dialog import SettingsDialog
-from .dialog_base import ResizableDialog
+from .dialog_base import ResizableDialog, set_dialog_titlebar_theme
 from .image_mixin import ImageMimeMixin
 from .image_codec import encode_qimage_to_payload
+from .titlebar_theme import apply_titlebar_theme
 from .item_presenter import present_item
 from .item_delegate import ClipItemDelegate
 from .theme import (
@@ -1744,7 +1745,27 @@ class MainWindow(QMainWindow):
             self._item_delegate.set_theme_tokens(self._theme_tokens)
             self._item_delegate.set_antialias_enabled(appearance.item_antialias)
         self._apply_theme()
+        self._apply_titlebar_theme()
         self.item_list.viewport().update()
+
+    def _apply_titlebar_theme(self) -> None:
+        """Match the OS-drawn caption to the current theme (see titlebar_theme)."""
+        tokens = self._theme_tokens
+        if tokens is None:
+            return
+        dark = bool(getattr(tokens, "is_dark", False))
+        # Dialogs are created later, so publish the style for them too.
+        set_dialog_titlebar_theme(dark, tokens.main_window_bg, tokens.text_primary)
+        try:
+            hwnd = int(self.winId())
+        except Exception:
+            return
+        apply_titlebar_theme(
+            hwnd,
+            dark=dark,
+            caption_hex=tokens.main_window_bg,
+            text_hex=tokens.text_primary,
+        )
 
     def set_note_style(self, color_hex: str, font_size: int) -> None:
         self._note_text_color = color_hex
@@ -1900,6 +1921,9 @@ class MainWindow(QMainWindow):
 
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
+        # The native handle only exists once shown; re-apply so a hidden-at-startup
+        # window still gets the themed caption.
+        self._apply_titlebar_theme()
         self.window_shown.emit()
 
     def closeEvent(self, event: QCloseEvent) -> None:
