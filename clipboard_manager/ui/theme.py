@@ -1,6 +1,17 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from typing import Literal
+
+ThemeMode = Literal["follow_system", "light", "dark"]
+THEME_MODES: tuple[str, ...] = ("follow_system", "light", "dark")
+
+
+def normalize_theme_mode(value: str | None) -> ThemeMode:
+    text = (value or "").strip().lower()
+    if text in THEME_MODES:
+        return text  # type: ignore[return-value]
+    return "follow_system"
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,6 +33,43 @@ def default_appearance_settings() -> AppearanceSettings:
         show_scrollbar=True,
         item_antialias=True,
     )
+
+
+def default_dark_appearance_settings() -> AppearanceSettings:
+    return AppearanceSettings(
+        window_bg="#1d2430",
+        font_size=13,
+        item_bg="#27303f",
+        item_selected_bg="#32445c",
+        show_scrollbar=True,
+        item_antialias=True,
+    )
+
+
+def resolve_dark_mode(mode: ThemeMode, system_dark: bool) -> bool:
+    if mode == "dark":
+        return True
+    if mode == "light":
+        return False
+    return bool(system_dark)
+
+
+def effective_appearance(
+    mode: ThemeMode,
+    user_appearance: AppearanceSettings,
+    system_dark: bool,
+) -> AppearanceSettings:
+    """Return the appearance to render: dark palette when dark is in effect,
+    otherwise the user's customized (light) palette."""
+    if resolve_dark_mode(mode, system_dark):
+        dark = default_dark_appearance_settings()
+        return replace(
+            dark,
+            font_size=max(10, min(28, int(user_appearance.font_size))),
+            show_scrollbar=bool(user_appearance.show_scrollbar),
+            item_antialias=bool(user_appearance.item_antialias),
+        )
+    return user_appearance
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,6 +137,7 @@ class ThemeTokens:
     scrollbar_handle_pressed: str
     base_font_size: int
     show_scrollbar: bool
+    is_dark: bool = False
     note_badge_bg_alpha: int = 52
     note_badge_radius: int = 7
     note_badge_padding_x: int = 8
@@ -225,12 +274,7 @@ def build_theme_tokens_from_appearance(appearance: AppearanceSettings) -> ThemeT
 
     return ThemeTokens(
         main_window_bg=window_hex,
-        window_start=(
-            "qlineargradient(x1:0, y1:0, x2:1, y2:1, "
-            "stop:0 #fbfcff, stop:0.52 #f6f8fb, stop:1 #eef3f8)"
-            if not is_dark_window
-            else window_hex
-        ),
+        window_start=window_hex,
         window_end=window_hex,
         text_primary=text_primary,
         text_secondary=text_secondary,
@@ -292,6 +336,7 @@ def build_theme_tokens_from_appearance(appearance: AppearanceSettings) -> ThemeT
         scrollbar_handle_pressed=scrollbar_handle_pressed,
         base_font_size=font_size,
         show_scrollbar=show_scrollbar,
+        is_dark=is_dark_window,
         note_badge_bg_alpha=34,
         note_badge_radius=6,
     )
@@ -312,6 +357,34 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
     scroll_h_size = "8px" if tokens.show_scrollbar else "0px"
     handle_v_min = "32px" if tokens.show_scrollbar else "0px"
     handle_h_min = "32px" if tokens.show_scrollbar else "0px"
+    if tokens.is_dark:
+        accent_bg = "#2f7fb8"
+        accent_hover_bg = "#3a8ec7"
+        accent_pressed_bg = "#2a6f9f"
+        accent_border = "#3f92c9"
+        left_panel_bg = tokens.panel_bg
+        tab_hover_bg = "rgba(255, 255, 255, 26)"
+        tab_selected_bg = tokens.item_selected_bg
+        tab_selected_border = tokens.item_selected_border
+        nav_bg = tokens.panel_bg
+        nav_hover_bg = "rgba(255, 255, 255, 22)"
+        row_bg = tokens.item_bg
+        row_border = tokens.item_border
+        footer_bg = tokens.panel_bg
+    else:
+        accent_bg = "#2f7cd6"
+        accent_hover_bg = "#3a88e0"
+        accent_pressed_bg = "#2a6cbb"
+        accent_border = "#2b71c4"
+        left_panel_bg = "#fbfcfe"
+        tab_hover_bg = "rgba(15, 23, 42, 14)"
+        tab_selected_bg = "#e8f1fd"
+        tab_selected_border = "#b6d4f5"
+        nav_bg = "#f3f5f8"
+        nav_hover_bg = "rgba(15, 23, 42, 12)"
+        row_bg = "#ffffff"
+        row_border = "#e6eaf0"
+        footer_bg = "#f7f9fb"
     return f"""
         QMainWindow {{
             background: {tokens.main_window_bg};
@@ -340,7 +413,7 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
         QDialog QComboBox {{
             background: {tokens.input_bg};
             border: 1px solid {tokens.input_border};
-            border-radius: 10px;
+            border-radius: 6px;
             color: {tokens.text_primary};
             selection-background-color: {tokens.input_selection_bg};
             selection-color: {tokens.input_selection_text};
@@ -354,7 +427,7 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
         QComboBox {{
             background: {tokens.input_bg};
             border: 1px solid {tokens.input_border};
-            border-radius: 10px;
+            border-radius: 6px;
             color: {tokens.text_primary};
             padding: 4px 26px 4px 8px;
             min-height: 22px;
@@ -381,7 +454,7 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
             background: {tokens.menu_bg};
             color: {tokens.text_primary};
             border: 1px solid {tokens.menu_border};
-            border-radius: 10px;
+            border-radius: 6px;
             padding: 3px;
             outline: 0;
             selection-background-color: {tokens.menu_item_selected_bg};
@@ -406,7 +479,7 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
             color: {tokens.menu_item_selected_text};
         }}
         QWidget#leftPanel {{
-            background: rgba(251, 252, 254, 218);
+            background: {left_panel_bg};
             border-right: 1px solid {tokens.panel_border};
             border-radius: 0px;
         }}
@@ -418,7 +491,7 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
         QListWidget, QTextEdit {{
             background: {tokens.input_bg};
             border: 1px solid {tokens.input_border};
-            border-radius: 10px;
+            border-radius: 6px;
             padding: 3px;
         }}
         QListWidget:focus {{
@@ -458,18 +531,18 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
             margin: 2px 6px 2px 0;
             padding: 8px 10px;
             min-height: 22px;
-            border-radius: 10px;
+            border-radius: 6px;
             background: transparent;
             border: 1px solid transparent;
             color: {tokens.text_primary};
         }}
         QListWidget#tabList::item:hover {{
-            background: rgba(255, 255, 255, 170);
+            background: {tab_hover_bg};
             border: 1px solid {tokens.item_hover_border};
         }}
         QListWidget#tabList::item:selected {{
-            background: rgba(236, 248, 255, 210);
-            border: 1px solid rgba(56, 167, 220, 130);
+            background: {tab_selected_bg};
+            border: 1px solid {tab_selected_border};
             color: {tokens.text_primary};
         }}
         QListWidget#itemList {{
@@ -481,7 +554,7 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
         QListWidget#itemList::item {{
             margin: 6px 2px;
             padding: 0px;
-            border-radius: 16px;
+            border-radius: 10px;
             background: transparent;
             border: none;
         }}
@@ -495,7 +568,7 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
             background: {tokens.input_bg};
             color: {tokens.text_primary};
             border: 1px solid {tokens.input_border};
-            border-radius: 12px;
+            border-radius: 6px;
             selection-background-color: {tokens.input_selection_bg};
             selection-color: {tokens.input_selection_text};
         }}
@@ -505,7 +578,7 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
         QPushButton {{
             background: {tokens.secondary_button_bg};
             border: 1px solid {tokens.secondary_button_border};
-            border-radius: 10px;
+            border-radius: 6px;
             padding: 6px 12px;
         }}
         QPushButton:hover {{
@@ -516,25 +589,28 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
             background: {tokens.secondary_button_pressed_bg};
         }}
         QPushButton#primaryButton {{
-            background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #29c6b7, stop:1 #37a3f2);
+            background: {accent_bg};
             color: #ffffff;
-            border-color: rgba(36, 156, 211, 170);
+            border: 1px solid {accent_border};
             font-weight: 600;
             min-height: 32px;
             padding: 5px 15px;
         }}
         QPushButton#primaryButton:hover {{
-            background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #25bdae, stop:1 #2c94e8);
+            background: {accent_hover_bg};
+        }}
+        QPushButton#primaryButton:pressed {{
+            background: {accent_pressed_bg};
         }}
         QLineEdit#globalSearchInput {{
             min-height: 34px;
             padding: 0 10px;
-            border-radius: 12px;
+            border-radius: 6px;
         }}
         QToolButton {{
             background: {tokens.tool_button_bg};
             border: 1px solid {tokens.tool_button_border};
-            border-radius: 10px;
+            border-radius: 6px;
             padding: 3px 6px;
         }}
         QToolButton:hover {{
@@ -552,22 +628,6 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
         }}
         QLabel {{
             color: {tokens.label_text};
-        }}
-        QLabel#appIconBadge {{
-            background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #28c8b8, stop:1 #3aa5f4);
-            border: 1px solid rgba(255, 255, 255, 190);
-            border-radius: 12px;
-            color: #ffffff;
-            font-weight: 700;
-        }}
-        QLabel#appNameLabel {{
-            color: #172033;
-            font-size: {tokens.base_font_size + 2}px;
-            font-weight: 700;
-        }}
-        QLabel#appSubtitleLabel {{
-            color: {tokens.text_secondary};
-            font-size: {max(10, tokens.base_font_size - 1)}px;
         }}
         QLabel#sidebarSectionLabel {{
             color: {tokens.text_secondary};
@@ -589,6 +649,69 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
             background: {tokens.statusbar_bg};
             border-top: 1px solid {tokens.statusbar_border};
             color: {tokens.statusbar_text};
+        }}
+
+        QListWidget#settingsNav {{
+            background: {nav_bg};
+            border: none;
+            border-right: 1px solid {tokens.panel_border};
+            border-radius: 0px;
+            padding: 10px 6px;
+            outline: none;
+        }}
+        QListWidget#settingsNav::item {{
+            padding: 7px 10px;
+            margin: 1px 2px;
+            border-radius: 5px;
+            background: transparent;
+            border: 1px solid transparent;
+            color: {tokens.text_primary};
+        }}
+        QListWidget#settingsNav::item:hover {{
+            background: {nav_hover_bg};
+            border: 1px solid transparent;
+        }}
+        QListWidget#settingsNav::item:selected {{
+            background: {tab_selected_bg};
+            border: 1px solid {tab_selected_border};
+            color: {tokens.text_primary};
+        }}
+        QStackedWidget#settingsPages, QScrollArea#settingsScroll {{
+            background: {tokens.dialog_bg};
+            border: none;
+        }}
+        QLabel#settingsPageTitle {{
+            color: {tokens.text_primary};
+            font-size: {tokens.base_font_size + 5}px;
+            font-weight: 600;
+            padding-bottom: 2px;
+        }}
+        QLabel#settingSectionTitle {{
+            color: {tokens.text_secondary};
+            font-size: {max(10, tokens.base_font_size - 1)}px;
+            font-weight: 600;
+            padding: 6px 2px 2px 2px;
+        }}
+        QFrame#settingRow {{
+            background: {row_bg};
+            border: 1px solid {row_border};
+            border-radius: 6px;
+        }}
+        QLabel#settingRowTitle {{
+            color: {tokens.text_primary};
+        }}
+        QLabel#settingRowDescription {{
+            color: {tokens.text_secondary};
+            font-size: {max(10, tokens.base_font_size - 2)}px;
+        }}
+        QWidget#settingsFooter {{
+            background: {footer_bg};
+            border-top: 1px solid {tokens.panel_border};
+        }}
+        QPushButton#colorPickButton {{
+            text-align: left;
+            padding: 5px 12px 5px 8px;
+            min-width: 96px;
         }}
 
         QScrollBar:vertical {{

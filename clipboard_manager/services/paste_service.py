@@ -6,9 +6,8 @@ import hashlib
 import sys
 from typing import Callable, Optional
 
-from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QTimer, Qt
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QMimeData, QTimer, QUrl, Qt
 from PySide6.QtGui import QClipboard, QImage, QPainter
-from PySide6.QtCore import QMimeData
 from pynput.keyboard import Controller, Key
 
 from .clipboard_service import ClipboardService

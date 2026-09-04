@@ -45,7 +45,6 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFrame,
-    QFormLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -925,7 +924,7 @@ class EditItemDialog(ResizableDialog):
         layout.addWidget(self.text_edit, 1)
 
         self.image_info_label = QLabel("当前为文本模式。", self)
-        self.image_info_label.setStyleSheet("color: #555;")
+        self.image_info_label.setObjectName("subtleHint")
         layout.addWidget(self.image_info_label)
 
         layout.addWidget(QLabel("备注："))
@@ -968,10 +967,6 @@ class EditItemDialog(ResizableDialog):
             self._result_type = "text"
 
     def _load_image_from_clipboard(self) -> None:
-        # Local import to keep startup path unchanged.
-        from PySide6.QtCore import QBuffer, QByteArray, QIODevice
-        from PySide6.QtWidgets import QApplication
-
         image = QApplication.clipboard().image()
         if image.isNull():
             QMessageBox.warning(self, "提示", "剪贴板中没有图片。")
@@ -1251,32 +1246,8 @@ class MainWindow(QMainWindow):
         left.setObjectName("leftPanel")
         left.setMinimumWidth(0)
         left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(18, 18, 14, 14)
-        left_layout.setSpacing(12)
-
-        brand = QHBoxLayout()
-        brand.setSpacing(10)
-        app_icon = QLabel()
-        app_icon.setObjectName("appIconBadge")
-        app_icon.setFixedSize(QSize(36, 36))
-        app_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon_pixmap = self.windowIcon().pixmap(QSize(26, 26))
-        if not icon_pixmap.isNull():
-            app_icon.setPixmap(icon_pixmap)
-        else:
-            app_icon.setText("C")
-        brand_text = QVBoxLayout()
-        brand_text.setSpacing(1)
-        app_name = QLabel("ClipNest")
-        app_name.setObjectName("appNameLabel")
-        app_subtitle = QLabel("本地剪贴板")
-        app_subtitle.setObjectName("appSubtitleLabel")
-        brand_text.addWidget(app_name)
-        brand_text.addWidget(app_subtitle)
-        brand_text.addStretch(1)
-        brand.addWidget(app_icon)
-        brand.addLayout(brand_text, 1)
-        left_layout.addLayout(brand)
+        left_layout.setContentsMargins(18, 14, 14, 14)
+        left_layout.setSpacing(10)
 
         section_label = QLabel("标签页")
         section_label.setObjectName("sidebarSectionLabel")
@@ -1421,7 +1392,8 @@ class MainWindow(QMainWindow):
             capture_tab_id=self._capture_tab_id,
             capture_tab_max=self._capture_tab_max,
             autostart=self._autostart_enabled,
-            appearance=self._appearance,
+            appearance=self.user_appearance(),
+            theme_mode=self.theme_mode(),
             note_color=self._note_text_color,
             note_font_size=self._note_font_size,
             pinned_color=self._pinned_accent_color,
@@ -1709,8 +1681,61 @@ class MainWindow(QMainWindow):
     def set_capture_tab_max(self, max_items: int) -> None:
         self._capture_tab_max = int(max_items)
 
+    def save_window_geometry(self) -> str:
+        data = self.saveGeometry()
+        return bytes(data).hex()
+
+    def restore_window_geometry(self, hex_text: str) -> bool:
+        clean = (hex_text or "").strip()
+        if not clean:
+            return False
+        try:
+            data = QByteArray.fromHex(clean.encode("ascii"))
+        except Exception:
+            return False
+        if data.isEmpty():
+            return False
+        restored = self.restoreGeometry(data)
+        self._ensure_within_screen()
+        return restored
+
+    def _ensure_within_screen(self) -> None:
+        screen = self.screen()
+        if screen is None:
+            app = QApplication.instance()
+            if app is None:
+                return
+            point = self.mapToGlobal(self.rect().center())
+            screen = app.screenAt(point)
+            if screen is None:
+                screen = app.primaryScreen()
+        if screen is None:
+            return
+        available = screen.availableGeometry()
+        frame = self.frameGeometry()
+        if frame.intersects(available):
+            return
+        x = max(available.left(), min(frame.x(), available.right() - frame.width()))
+        y = max(available.top(), min(frame.y(), available.bottom() - frame.height()))
+        width = min(frame.width(), available.width())
+        height = min(frame.height(), available.height())
+        self.move(x, y)
+        self.resize(width, height)
+
     def current_appearance(self) -> AppearanceSettings:
         return self._appearance
+
+    def set_user_appearance(self, appearance: AppearanceSettings) -> None:
+        self._user_appearance = appearance
+
+    def user_appearance(self) -> AppearanceSettings:
+        return getattr(self, "_user_appearance", None) or self._appearance
+
+    def set_theme_mode(self, mode: str) -> None:
+        self._theme_mode = str(mode or "follow_system")
+
+    def theme_mode(self) -> str:
+        return getattr(self, "_theme_mode", "follow_system")
 
     def set_appearance(self, appearance: AppearanceSettings) -> None:
         self._appearance = appearance

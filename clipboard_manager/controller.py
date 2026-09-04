@@ -8,6 +8,7 @@ import time
 from typing import Optional
 
 from PySide6.QtCore import QTimer, Qt
+from PySide6.QtGui import QGuiApplication
 
 from .config import AUTO_HIDE_ON_PASTE, default_hotkey
 from .models import ParsedClipboardItem
@@ -19,7 +20,14 @@ from .services.paste_service import PasteService
 from .services.autostart_service import AutoStartService
 from .ui.main_window import MainWindow
 from .ui.dialog_base import load_dialog_sizes_from_setting, dump_dialog_sizes_to_setting
-from .ui.theme import AppearanceSettings, default_appearance_settings, normalize_hex_color
+from .ui.theme import (
+    AppearanceSettings,
+    default_appearance_settings,
+    effective_appearance,
+    normalize_theme_mode,
+    normalize_hex_color,
+    resolve_dark_mode,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +54,7 @@ class AppController:
         self._capture_tab_id: Optional[int] = None
         self._search_query: str = ""
         self._items_cache: dict[int, list] = {}
+        self._theme_mode: str = "follow_system"
         self._pending_items_refresh = False
         self._pending_items_refresh_tab: Optional[int] = None
         self._rich_segments_cache: dict[int, list[dict]] = {}
@@ -97,10 +106,21 @@ class AppController:
 
         appearance = self._load_appearance_settings()
         self._save_appearance_settings(appearance)
-        self._window.set_appearance(appearance)
+        self._theme_mode = normalize_theme_mode(self._repository.get_setting("theme_mode"))
+        self._apply_theme_for_current_mode()
+        try:
+            style_hints = QGuiApplication.styleHints()
+            color_signal = getattr(style_hints, "colorSchemeChanged", None)
+            if color_signal is not None:
+                color_signal.connect(self._on_system_color_scheme_changed)
+        except Exception:
+            logger.exception("[Theme] failed to connect colorSchemeChanged")
         splitter_sizes = self._parse_splitter_sizes_setting()
         if splitter_sizes is not None:
             self._window.set_main_splitter_sizes(splitter_sizes[0], splitter_sizes[1])
+        geometry_hex = self._repository.get_setting("main_window_geometry") or ""
+        if geometry_hex:
+            self._window.restore_window_geometry(geometry_hex)
 
         if self._hotkey_service.last_error:
             fallback = default_hotkey()
@@ -125,6 +145,10 @@ class AppController:
             self._repository.set_setting("dialog_sizes", dump_dialog_sizes_to_setting())
         except Exception:
             logger.exception("[UI] save dialog sizes failed")
+        try:
+            self._repository.set_setting("main_window_geometry", self._window.save_window_geometry())
+        except Exception:
+            logger.exception("[UI] save main window geometry failed")
         self._repository.close()
 
     def _connect_signals(self) -> None:
@@ -237,6 +261,28 @@ class AppController:
         self._repository.set_setting("appearance_item_selected_bg", appearance.item_selected_bg)
         self._repository.set_setting("appearance_show_scrollbar", "1" if appearance.show_scrollbar else "0")
         self._repository.set_setting("appearance_item_antialias", "1" if appearance.item_antialias else "0")
+
+    def _system_dark(self) -> bool:
+        try:
+            scheme = QGuiApplication.styleHints().colorScheme()
+        except Exception:
+            return False
+        return scheme == Qt.ColorScheme.Dark
+
+    def _apply_theme_for_current_mode(self) -> None:
+        user_appearance = self._load_appearance_settings()
+        self._window.set_user_appearance(user_appearance)
+        self._window.set_theme_mode(self._theme_mode)
+        effective = effective_appearance(self._theme_mode, user_appearance, self._system_dark())
+        self._window.set_appearance(effective)
+        logger.info("[Theme] applied mode=%s dark=%s", self._theme_mode, resolve_dark_mode(self._theme_mode, self._system_dark()))
+
+    def _on_system_color_scheme_changed(self, _scheme) -> None:
+        mode = normalize_theme_mode(self._repository.get_setting("theme_mode"))
+        if mode != "follow_system":
+            return
+        self._theme_mode = mode
+        self._apply_theme_for_current_mode()
 
     def _on_hotkey_pressed(self) -> None:
         logger.info("[Hotkey] showClipboardPanel from globalShortcut")
@@ -884,6 +930,18 @@ class AppController:
                 )
 
         self._on_appearance_change_requested(payload.appearance)
+
+        requested_mode = normalize_theme_mode(payload.theme_mode)
+        if requested_mode != normalize_theme_mode(self._repository.get_setting("theme_mode")):
+            self._repository.set_setting("theme_mode", requested_mode)
+            self._theme_mode = requested_mode
+            mode_labels = {
+                "follow_system": "跟随系统",
+                "light": "浅色",
+                "dark": "深色",
+            }
+            messages.append(f"主题模式已设置为：{mode_labels.get(requested_mode, requested_mode)}")
+        self._apply_theme_for_current_mode()
 
         if payload.note_color != (self._repository.get_setting("note_text_color") or "#1f2937"):
             self._on_note_color_change_requested(payload.note_color)
