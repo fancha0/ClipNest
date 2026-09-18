@@ -1829,7 +1829,7 @@ class MainWindow(QMainWindow):
             self.isVisible(),
             self.isActiveWindow(),
         )
-        if not self.isVisible():
+        if not self.should_hide_on_hotkey():
             return
         if self.isActiveWindow():
             return
@@ -1845,7 +1845,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(260, self._notify_hotkey_foreground_limited)
 
     def _notify_hotkey_foreground_limited(self) -> None:
-        if not self.isVisible() or self.isActiveWindow():
+        if not self.should_hide_on_hotkey() or self.isActiveWindow():
             return
         if self._tray_icon is None or not self._tray_icon.isVisible():
             return
@@ -1858,6 +1858,12 @@ class MainWindow(QMainWindow):
 
     def _force_foreground_windows(self) -> None:
         if sys.platform != "win32":
+            return
+        # Delayed retries scheduled by show_for_quick_paste may fire after the
+        # window was hidden again (fast show -> Enter-to-paste flow). Raw Win32
+        # calls would resurrect the hidden window as a blank shell, so bail out.
+        if not self.should_hide_on_hotkey():
+            logger.debug("[UI] force_foreground skipped; window not visible")
             return
         try:
             import ctypes
