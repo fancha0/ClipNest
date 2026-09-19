@@ -471,6 +471,21 @@ def _create_search_icon() -> QIcon:
     return QIcon(pixmap)
 
 
+def _create_add_icon() -> QIcon:
+    pixmap = QPixmap(18, 18)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    pen = QPen(QColor("#7A8699"))
+    pen.setWidthF(1.8)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen)
+    painter.drawLine(9.0, 4.0, 9.0, 14.0)
+    painter.drawLine(4.0, 9.0, 14.0, 9.0)
+    painter.end()
+    return QIcon(pixmap)
+
+
 def _encode_qimage_to_payload(image: QImage, mime_type: str = "image/png") -> Optional[dict[str, Any]]:
     return encode_qimage_to_payload(image, mime_type)
 
@@ -1239,7 +1254,7 @@ class MainWindow(QMainWindow):
 
         self._main_splitter = QSplitter(Qt.Orientation.Horizontal)
         self._main_splitter.setChildrenCollapsible(True)
-        self._main_splitter.setHandleWidth(8)
+        self._main_splitter.setHandleWidth(2)
         self._main_splitter.splitterMoved.connect(self._on_main_splitter_moved)
         outer.addWidget(self._main_splitter)
 
@@ -1247,7 +1262,7 @@ class MainWindow(QMainWindow):
         left.setObjectName("leftPanel")
         left.setMinimumWidth(0)
         left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(18, 14, 14, 14)
+        left_layout.setContentsMargins(18, 14, 6, 14)
         left_layout.setSpacing(10)
 
         section_label = QLabel("标签页")
@@ -1273,14 +1288,11 @@ class MainWindow(QMainWindow):
         right = QWidget()
         right.setObjectName("rightPanel")
         right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(20, 18, 20, 18)
+        right_layout.setContentsMargins(6, 18, 20, 18)
         right_layout.setSpacing(12)
 
         tools = QHBoxLayout()
         tools.setSpacing(6)
-        self.add_item_btn = QPushButton("＋ 新建条目")
-        self.add_item_btn.setObjectName("primaryButton")
-        self.add_item_btn.setToolTip("新建条目（Ctrl+N）")
         self.search_input = QLineEdit(self)
         self.search_input.setObjectName("globalSearchInput")
         self.search_input.setPlaceholderText("搜索全部条目...（Ctrl+F）")
@@ -1289,13 +1301,19 @@ class MainWindow(QMainWindow):
         search_icon_action.setIcon(_create_search_icon())
         search_icon_action.setToolTip("搜索全部条目（Ctrl+F）")
         self.search_input.addAction(search_icon_action, QLineEdit.ActionPosition.LeadingPosition)
+        self.add_item_btn = QToolButton()
+        self.add_item_btn.setObjectName("addItemButton")
+        self.add_item_btn.setIcon(_create_add_icon())
+        self.add_item_btn.setIconSize(QSize(18, 18))
+        self.add_item_btn.setToolTip("新建条目（Ctrl+N）")
+        self.add_item_btn.setFixedSize(QSize(38, 34))
         self.settings_button = QToolButton()
         self.settings_button.setObjectName("settingsButton")
         self.settings_button.setText("⚙")
         self.settings_button.setToolTip("设置")
         self.settings_button.setFixedSize(QSize(38, 34))
-        tools.addWidget(self.add_item_btn)
         tools.addWidget(self.search_input, 1)
+        tools.addWidget(self.add_item_btn)
         tools.addWidget(self.settings_button)
         right_layout.addLayout(tools)
 
@@ -1347,6 +1365,7 @@ class MainWindow(QMainWindow):
             note_color=self._note_text_color,
             note_font_size=self._note_font_size,
             tokens=self._theme_tokens,
+            type_role=ITEM_TYPE_ROLE,
             parent=self.item_list,
         )
         self._item_delegate.set_antialias_enabled(self._appearance.item_antialias)
@@ -1978,7 +1997,22 @@ class MainWindow(QMainWindow):
             ):
                 if self._activate_current_item():
                     return True
+            if (
+                mod_value in (
+                    Qt.KeyboardModifier.NoModifier,
+                    Qt.KeyboardModifier.KeypadModifier,
+                )
+                and key_value is not None
+                and Qt.Key.Key_1 <= key_value <= Qt.Key.Key_9
+            ):
+                if self._activate_item_at_row(int(key_value) - int(Qt.Key.Key_1)):
+                    return True
         return super().eventFilter(watched, event)
+
+    def _activate_item_at_row(self, row: int) -> bool:
+        if row < 0:
+            return False
+        return self._activate_item(self.item_list.item(row))
 
     def _on_item_list_enter_pressed(self) -> None:
         focus_widget = QApplication.focusWidget()

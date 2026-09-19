@@ -14,6 +14,20 @@ class ClipItemDelegate(QStyledItemDelegate):
     _PINNED_TINT_RATIO = 0.16
     _PINNED_BORDER_RATIO = 0.55
 
+    # Fixed accent color per content type so users can scan by color at a glance.
+    # (light_hex, dark_hex)
+    _TYPE_COLORS: dict[str, tuple[str, str]] = {
+        "text": ("#6b7686", "#9aa7ba"),
+        "url": ("#2f6fd6", "#6da3f0"),
+        "image": ("#2e8b57", "#5cbf8a"),
+        "files": ("#d07a2a", "#e8a45c"),
+        "html": ("#7a4fd0", "#a98ae8"),
+        "rich": ("#12909c", "#54c2ce"),
+        "bundle": ("#4f5fd0", "#8f9ae8"),
+        "raw_snapshot": ("#5a6572", "#8b95a3"),
+        "special": ("#b2543a", "#e08a6e"),
+    }
+
     def __init__(
         self,
         note_role: int,
@@ -26,6 +40,8 @@ class ClipItemDelegate(QStyledItemDelegate):
         note_color: str,
         note_font_size: int,
         tokens: ThemeTokens | None = None,
+        type_role: int = 0,
+        show_number_hints: bool = True,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -35,6 +51,8 @@ class ClipItemDelegate(QStyledItemDelegate):
         self._secondary_role = int(secondary_role)
         self._type_label_role = int(type_label_role)
         self._pinned_role = int(pinned_role)
+        self._type_role = int(type_role) if type_role else 0
+        self._show_number_hints = bool(show_number_hints)
         self._pinned_color = self._normalized_color(pinned_color, "#1fb8cb")
         self._note_color = QColor(note_color)
         self._note_font_size = int(note_font_size)
@@ -90,12 +108,12 @@ class ClipItemDelegate(QStyledItemDelegate):
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
         hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
         pinned = bool(index.data(self._pinned_role))
-        card_rect = QRectF(option.rect.adjusted(5, 4, -5, -4))
+        card_rect = QRectF(option.rect.adjusted(3, 3, -3, -3))
         self._draw_card(painter, card_rect, selected=selected, hovered=hovered, pinned=pinned)
 
-        text_rect = option.rect.adjusted(19, 14, -19, -14)
+        text_rect = option.rect.adjusted(14, 12, -14, -12)
         if pinned:
-            text_rect.setLeft(text_rect.left() + 4)
+            text_rect.setLeft(text_rect.left() + 2)
             pin_rect = self._draw_pin_glyph(painter, text_rect)
             text_rect.setRight(max(text_rect.left(), pin_rect.left() - 8))
 
@@ -159,12 +177,24 @@ class ClipItemDelegate(QStyledItemDelegate):
         has_note = bool(index.data(self._has_note_role)) and bool(note_text)
         if not content_text:
             content_text = str(index.data(Qt.ItemDataRole.DisplayRole) or "").strip()
-        pill_rect = self._draw_type_pill(painter, text_rect, type_label) if type_label else QRect()
+        content_type = self._row_content_type(index)
+        pill_rect = (
+            self._draw_type_pill(painter, text_rect, type_label, content_type)
+            if type_label
+            else QRect()
+        )
         main_rect = QRect(text_rect)
         if not pill_rect.isNull():
             main_rect.setRight(max(main_rect.left(), pill_rect.left() - 10))
         secondary_rect = QRect(text_rect.left(), text_rect.bottom() - 20, text_rect.width(), 20)
         main_rect.setBottom(secondary_rect.top() - 3)
+        number_row = (
+            index.row()
+            if self._show_number_hints and 0 <= index.row() < 9
+            else -1
+        )
+        if number_row >= 0:
+            secondary_rect.setRight(max(secondary_rect.left(), text_rect.right() - 22))
 
         if has_note:
             content_rect = self._draw_note_badge_and_content(
@@ -197,17 +227,13 @@ class ClipItemDelegate(QStyledItemDelegate):
                 selected=False,
                 primary=False,
             )
+        if number_row >= 0:
+            badge_rect = QRect(text_rect.right() - 16, secondary_rect.center().y() - 8, 16, 16)
+            self._draw_row_number_badge(painter, badge_rect, number_row + 1, content_type)
         painter.restore()
 
     def _draw_card(self, painter: QPainter, rect: QRectF, selected: bool, hovered: bool, pinned: bool = False) -> None:
         dark = bool(getattr(self._tokens, "is_dark", False))
-        shadow_rect = QRectF(rect)
-        shadow_color = (10, 14, 22) if dark else (30, 42, 62)
-        for offset, alpha in ((5, 16), (3, 18), (1, 12)):
-            painter.setPen(Qt.PenStyle.NoPen)
-            color = QColor(*shadow_color, alpha)
-            painter.setBrush(color)
-            painter.drawRoundedRect(shadow_rect.translated(0, offset / 2.0), 9.0, 9.0)
 
         if selected:
             glow_color = self._parse_token_color(
@@ -262,7 +288,7 @@ class ClipItemDelegate(QStyledItemDelegate):
         bar_width = 3.0
         inset_y = 8.0
         bar_rect = QRectF(
-            rect.left() + 1.5,
+            rect.left() + 1.0,
             rect.top() + inset_y,
             bar_width,
             max(4.0, rect.height() - inset_y * 2),
@@ -299,6 +325,45 @@ class ClipItemDelegate(QStyledItemDelegate):
         painter.restore()
         return glyph_rect
 
+    def _row_content_type(self, index) -> str:
+        if not self._type_role:
+            return ""
+        return str(index.data(self._type_role) or "").strip()
+
+    def _type_accent(self, content_type: str) -> QColor | None:
+        """Fixed accent color for a content type, or None to keep the neutral pill."""
+        dark = bool(getattr(self._tokens, "is_dark", False))
+        pair = self._TYPE_COLORS.get((content_type or "").strip())
+        if pair is None:
+            return None
+        color = QColor(pair[1] if dark else pair[0])
+        return color if color.isValid() else None
+
+    def _draw_row_number_badge(
+        self,
+        painter: QPainter,
+        rect: QRect,
+        number: int,
+        content_type: str = "",
+    ) -> None:
+        """Small number badge under the type pill; same color family as the pill."""
+        bg, border_color, text_color = self._pill_colors(self._type_accent(content_type))
+        painter.save()
+        badge_font = QFont(painter.font())
+        badge_font.setPointSize(max(8, painter.font().pointSize() - 3))
+        badge_font.setWeight(QFont.Weight.Medium)
+        painter.setFont(badge_font)
+        painter.setPen(QPen(border_color, 1))
+        painter.setBrush(bg)
+        painter.drawRoundedRect(QRectF(rect), 5.0, 5.0)
+        painter.setPen(QPen(text_color))
+        painter.drawText(
+            rect,
+            int(Qt.AlignmentFlag.AlignCenter),
+            str(number),
+        )
+        painter.restore()
+
     @staticmethod
     def _normalized_color(color_hex: str, fallback: str) -> QColor:
         color = QColor(str(color_hex or "").strip())
@@ -330,7 +395,13 @@ class ClipItemDelegate(QStyledItemDelegate):
             int(round(color.green() * (1 - ratio) + target.green() * ratio)),
             int(round(color.blue() * (1 - ratio) + target.blue() * ratio)),
         )
-    def _draw_type_pill(self, painter: QPainter, rect: QRect, type_label: str) -> QRect:
+    def _draw_type_pill(
+        self,
+        painter: QPainter,
+        rect: QRect,
+        type_label: str,
+        content_type: str = "",
+    ) -> QRect:
         pill_font = QFont(painter.font())
         pill_font.setPointSize(max(9, painter.font().pointSize() - 2))
         pill_font.setWeight(QFont.Weight.Medium)
@@ -342,33 +413,14 @@ class ClipItemDelegate(QStyledItemDelegate):
         pill_h = max(22, fm.height() + 4)
         pill_rect = QRect(rect.right() - pill_w, rect.top() + 1, pill_w, pill_h)
 
-        dark = bool(getattr(self._tokens, "is_dark", False))
+        accent = self._type_accent(content_type)
         painter.save()
         painter.setFont(pill_font)
-        painter.setPen(
-            QPen(
-                self._parse_token_color(
-                    self._tokens.item_border,
-                    fallback=QColor(78, 92, 114) if dark else QColor(215, 222, 232),
-                ),
-                1,
-            )
-        )
-        painter.setBrush(
-            self._parse_token_color(
-                self._tokens.input_bg,
-                fallback=QColor(46, 56, 72) if dark else QColor(246, 248, 251),
-            )
-        )
+        tinted_bg, border_color, text_color = self._pill_colors(accent)
+        painter.setPen(QPen(border_color, 1))
+        painter.setBrush(tinted_bg)
         painter.drawRoundedRect(QRectF(pill_rect), pill_h / 2.0, pill_h / 2.0)
-        painter.setPen(
-            QPen(
-                self._parse_token_color(
-                    self._tokens.text_secondary,
-                    fallback=QColor(168, 180, 200) if dark else QColor(100, 112, 128),
-                )
-            )
-        )
+        painter.setPen(QPen(text_color))
         painter.drawText(
             pill_rect,
             int(Qt.AlignmentFlag.AlignCenter),
@@ -376,6 +428,36 @@ class ClipItemDelegate(QStyledItemDelegate):
         )
         painter.restore()
         return pill_rect
+
+    def _pill_colors(self, accent: QColor | None) -> tuple[QColor, QColor, QColor]:
+        """Shared (background, border, text) colors for pills and number badges."""
+        dark = bool(getattr(self._tokens, "is_dark", False))
+        if accent is not None:
+            base_bg = self._parse_token_color(
+                self._tokens.input_bg,
+                fallback=QColor(46, 56, 72) if dark else QColor(246, 248, 251),
+            )
+            bg_ratio = 0.16 if dark else 0.10
+            tinted_bg = QColor(
+                int(round(accent.red() * bg_ratio + base_bg.red() * (1 - bg_ratio))),
+                int(round(accent.green() * bg_ratio + base_bg.green() * (1 - bg_ratio))),
+                int(round(accent.blue() * bg_ratio + base_bg.blue() * (1 - bg_ratio))),
+            )
+            border_color = self._color_with_alpha(accent, 140 if dark else 110)
+            return tinted_bg, border_color, accent
+        neutral_bg = self._parse_token_color(
+            self._tokens.input_bg,
+            fallback=QColor(46, 56, 72) if dark else QColor(246, 248, 251),
+        )
+        border_color = self._parse_token_color(
+            self._tokens.item_border,
+            fallback=QColor(78, 92, 114) if dark else QColor(215, 222, 232),
+        )
+        text_color = self._parse_token_color(
+            self._tokens.text_secondary,
+            fallback=QColor(168, 180, 200) if dark else QColor(100, 112, 128),
+        )
+        return neutral_bg, border_color, text_color
 
     def _draw_note_badge_and_content(
         self,
