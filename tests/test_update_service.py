@@ -78,5 +78,21 @@ class UpdaterBatTests(unittest.TestCase):
         self.assertIn('del "%~f0"', bat)
 
 
+class HttpJsonTests(unittest.TestCase):
+    def test_http_json_tolerates_utf8_bom(self) -> None:
+        import io
+        from unittest import mock
+
+        from clipboard_manager.services import update_service
+
+        fake = io.BytesIO(b"\xef\xbb\xbf{\"version\": \"0.2.0\"}")
+        fake.headers = {}
+        with mock.patch.object(
+            update_service.urllib.request, "urlopen", return_value=fake
+        ):
+            data = update_service._http_json("https://example.com/latest.json")
+        self.assertEqual(data["version"], "0.2.0")
+
+
 if __name__ == "__main__":
     unittest.main()

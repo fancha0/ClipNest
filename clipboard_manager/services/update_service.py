@@ -83,7 +83,7 @@ def _http_json(url: str) -> dict:
         },
     )
     with urllib.request.urlopen(request, timeout=_REQUEST_TIMEOUT) as response:
-        return json.loads(response.read().decode("utf-8"))
+        return json.loads(response.read().decode("utf-8-sig"))
 
 
 def build_updater_bat(source_dir: str, install_dir: str, exe_name: str) -> str:

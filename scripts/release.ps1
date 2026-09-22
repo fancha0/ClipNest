@@ -20,7 +20,10 @@ $tag = "v$Version"
 Push-Location $root
 try {
     Write-Output "==> 1/5 写入版本号 $Version"
-    Set-Content -Path (Join-Path $root "clipboard_manager\version.py") -Value "APP_VERSION = `"$Version`"" -Encoding UTF8
+    [System.IO.File]::WriteAllText(
+        (Join-Path $root "clipboard_manager\version.py"),
+        "APP_VERSION = `"$Version`"",
+        (New-Object System.Text.UTF8Encoding($false)))
 
     Write-Output "==> 2/5 打包（先结束运行中的 ClipNest）"
     cmd /c "taskkill /F /IM ClipNest.exe >nul 2>&1"
@@ -59,7 +62,7 @@ try {
             url     = "$PublicBaseUrl/ClipNest-Windows.zip"
             size    = (Get-Item $zipPath).Length
         } | ConvertTo-Json
-        Set-Content -Path $manifestPath -Value $manifest -Encoding UTF8
+        [System.IO.File]::WriteAllText($manifestPath, $manifest, (New-Object System.Text.UTF8Encoding($false)))
 
         ssh -p $SshPort $SshTarget "mkdir -p $RemoteDir"
         if ($LASTEXITCODE -ne 0) { throw "SSH 连接失败：$SshTarget" }
