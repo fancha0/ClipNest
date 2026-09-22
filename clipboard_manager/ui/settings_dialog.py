@@ -51,10 +51,11 @@ def _to_qt_hotkey_text(hotkey_text: str) -> str:
     return "+".join("Meta" if part.lower() == "win" else part for part in parts)
 
 NAV_PAGES = (
-    ("通用", "\u2699"),
+    ("通用", "⚙"),
     ("外观", "\U0001F3A8"),
     ("备注与置顶", "\U0001F4CC"),
     ("数据", "\U0001F4BE"),
+    ("关于", "ℹ"),
 )
 
 
@@ -70,6 +71,7 @@ class SettingsPayload:
     note_font_size: int
     pinned_color: str
     apply_only: bool = False
+    auto_check_update: bool = True
 
 
 class SettingsDialog(ResizableDialog):
@@ -94,6 +96,7 @@ class SettingsDialog(ResizableDialog):
         note_font_size: int,
         pinned_color: str,
         tabs: list[tuple[int, str]],
+        auto_check_update: bool = True,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("设置")
@@ -108,6 +111,7 @@ class SettingsDialog(ResizableDialog):
         self._autostart_initial = autostart
         self._note_font_size_initial = note_font_size
         self._theme_mode_initial = normalize_theme_mode(theme_mode)
+        self._auto_check_update_initial = bool(auto_check_update)
         self._export_requested = False
         self._import_requested = False
 
@@ -142,6 +146,7 @@ class SettingsDialog(ResizableDialog):
         self.pages.addWidget(self._wrap_scroll(self._build_appearance_page()))
         self.pages.addWidget(self._wrap_scroll(self._build_note_page()))
         self.pages.addWidget(self._wrap_scroll(self._build_data_page()))
+        self.pages.addWidget(self._wrap_scroll(self._build_about_page()))
         body.addWidget(self.pages, 1)
         root.addLayout(body, 1)
 
@@ -263,19 +268,6 @@ class SettingsDialog(ResizableDialog):
             )
         )
         layout.addWidget(capture_section)
-
-        about_section = SettingsSection("关于", page)
-        self.check_update_btn = QPushButton("检查更新", page)
-        self.check_update_btn.setFixedWidth(120)
-        self.check_update_btn.clicked.connect(self._on_check_update_clicked)
-        about_section.add_row(
-            SettingRow(
-                "软件更新",
-                self.check_update_btn,
-                f"当前版本 v{APP_VERSION}。检查并安装最新版本。",
-            )
-        )
-        layout.addWidget(about_section)
         layout.addStretch(1)
         return page
 
@@ -410,6 +402,58 @@ class SettingsDialog(ResizableDialog):
         layout.addStretch(1)
         return page
 
+    def _build_about_page(self) -> QWidget:
+        page, layout = self._new_page("关于")
+
+        header = QHBoxLayout()
+        icon_label = QLabel(page)
+        window_icon = self.windowIcon()
+        if not window_icon.isNull():
+            icon_label.setPixmap(window_icon.pixmap(44, 44))
+        header.addWidget(icon_label)
+        name_label = QLabel("ClipNest", page)
+        name_label.setObjectName("aboutAppName")
+        header.addWidget(name_label)
+        header.addStretch(1)
+        layout.addLayout(header)
+
+        self.current_version_label = QLabel(f"当前版本 v{APP_VERSION}", page)
+        layout.addWidget(self.current_version_label)
+
+        self.latest_version_label = QLabel("最新版本：未知（点击检查更新）", page)
+        self.latest_version_label.setObjectName("aboutLatestVersion")
+        layout.addWidget(self.latest_version_label)
+
+        self.check_update_btn = QPushButton("检查更新", page)
+        self.check_update_btn.setFixedWidth(120)
+        self.check_update_btn.clicked.connect(self._on_check_update_clicked)
+
+        self.auto_update_chk = QCheckBox(page)
+        self.auto_update_chk.setChecked(self._auto_check_update_initial)
+
+        section = SettingsSection("软件更新", page)
+        section.add_row(
+            SettingRow(
+                "检查更新",
+                self.check_update_btn,
+                "从更新服务器获取最新版本并自动安装。",
+            )
+        )
+        section.add_row(
+            SettingRow(
+                "启动时自动检查",
+                self.auto_update_chk,
+                "启动后自动静默检查，发现新版本时弹出更新窗口。",
+            )
+        )
+        layout.addWidget(section)
+        layout.addStretch(1)
+        return page
+
+    def set_latest_version(self, version: str, newer: bool) -> None:
+        suffix = "发现新版本" if newer else "已是最新"
+        self.latest_version_label.setText(f"最新版本 v{version}（{suffix}）")
+
     # ---------- behavior ----------
 
     def _request_export(self) -> None:
@@ -515,4 +559,5 @@ class SettingsDialog(ResizableDialog):
             note_color=self._note_color,
             note_font_size=int(self.note_font_spin.value()),
             pinned_color=self._pinned_color,
+            auto_check_update=bool(self.auto_update_chk.isChecked()),
         )

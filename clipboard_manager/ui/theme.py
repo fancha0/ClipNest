@@ -711,6 +711,13 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
         QLabel#settingsApplyStatus {{
             color: {tokens.text_secondary};
         }}
+        QLabel#aboutAppName {{
+            font-size: 20px;
+            font-weight: 600;
+        }}
+        QLabel#aboutLatestVersion {{
+            color: {tokens.text_secondary};
+        }}
         QPushButton#colorPickButton {{
             text-align: left;
             padding: 5px 12px 5px 8px;

@@ -1190,6 +1190,7 @@ class MainWindow(QMainWindow):
         self._hotkey_text = ""
         self._active_settings_dialog: Optional[SettingsDialog] = None
         self._update_dialog: Optional[UpdateDialog] = None
+        self._auto_check_update = True
         self._capture_tab_text = "未设置"
         self._capture_tab_id: Optional[int] = None
         self._capture_tab_max: int = MAX_ITEMS_PER_TAB
@@ -1426,6 +1427,7 @@ class MainWindow(QMainWindow):
             note_font_size=self._note_font_size,
             pinned_color=self._pinned_accent_color,
             tabs=[(tab.id, tab.name) for tab in self._tabs_snapshot],
+            auto_check_update=self._auto_check_update,
         )
         self._active_settings_dialog = dialog
         dialog.apply_requested.connect(self._on_settings_apply_requested)
@@ -1458,6 +1460,14 @@ class MainWindow(QMainWindow):
         dialog = self._active_settings_dialog
         if dialog is not None:
             dialog.set_update_status(text)
+
+    def set_auto_check_update(self, enabled: bool) -> None:
+        self._auto_check_update = bool(enabled)
+
+    def notify_update_check_result(self, version: str, newer: bool) -> None:
+        dialog = self._active_settings_dialog
+        if dialog is not None:
+            dialog.set_latest_version(version, newer)
 
     def show_update_available(self, info: dict) -> None:
         if self._update_dialog is not None:

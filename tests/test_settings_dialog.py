@@ -76,6 +76,25 @@ class SettingsDialogApplyTests(unittest.TestCase):
         dialog.set_apply_feedback("已应用")
         self.assertEqual(dialog.apply_status_label.text(), "已应用")
 
+    def test_about_page_shows_versions(self) -> None:
+        dialog = self._make_dialog()
+        self.assertIn("当前版本 v", dialog.current_version_label.text())
+        self.assertIn("未知", dialog.latest_version_label.text())
+
+    def test_set_latest_version_reflects_result(self) -> None:
+        dialog = self._make_dialog()
+        dialog.set_latest_version("0.2.0", True)
+        self.assertIn("v0.2.0", dialog.latest_version_label.text())
+        self.assertIn("发现新版本", dialog.latest_version_label.text())
+        dialog.set_latest_version("0.2.0", False)
+        self.assertIn("已是最新", dialog.latest_version_label.text())
+
+    def test_auto_check_update_round_trips_through_payload(self) -> None:
+        dialog = self._make_dialog()
+        self.assertTrue(dialog.result_payload().auto_check_update)
+        dialog.auto_update_chk.setChecked(False)
+        self.assertFalse(dialog.result_payload().auto_check_update)
+
 
 if __name__ == "__main__":
     unittest.main()

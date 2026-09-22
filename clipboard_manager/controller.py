@@ -52,6 +52,8 @@ class AppController:
         self._autostart_service = AutoStartService()
         self._update_service = UpdateService()
         self._update_zip_path = ""
+        self._auto_check_update = True
+        self._update_check_silent = False
         self._pending_focus_target: Optional[FocusTarget] = None
         self._auto_hide_on_paste = AUTO_HIDE_ON_PASTE
         self._capture_tab_id: Optional[int] = None
@@ -71,6 +73,13 @@ class AppController:
         self._connect_signals()
 
     def initialize(self) -> None:
+        self._auto_check_update = (
+            self._repository.get_setting("auto_check_update") or "1"
+        ) == "1"
+        self._window.set_auto_check_update(self._auto_check_update)
+        if self._auto_check_update:
+            QTimer.singleShot(3000, self._run_startup_update_check)
+
         tabs = self._repository.list_tabs()
         active_tab_id = self._parse_int_setting("active_tab_id")
         if not tabs:
@@ -941,6 +950,15 @@ class AppController:
                     "已开启开机自启动" if payload.autostart else "已关闭开机自启动"
                 )
 
+        auto_check = bool(payload.auto_check_update)
+        if auto_check != self._auto_check_update:
+            self._auto_check_update = auto_check
+            self._repository.set_setting("auto_check_update", "1" if auto_check else "0")
+            self._window.set_auto_check_update(auto_check)
+            messages.append(
+                "启动时自动检查更新已开启" if auto_check else "启动时自动检查更新已关闭"
+            )
+
         self._on_appearance_change_requested(payload.appearance)
 
         requested_mode = normalize_theme_mode(payload.theme_mode)
@@ -972,16 +990,29 @@ class AppController:
             self._window.show_settings_apply_result(messages)
 
     def _on_check_update_requested(self) -> None:
+        self._check_for_updates(silent=False)
+
+    def _run_startup_update_check(self) -> None:
+        if self._auto_check_update:
+            self._check_for_updates(silent=True)
+
+    def _check_for_updates(self, silent: bool) -> None:
+        self._update_check_silent = silent
         self._update_service.check_async()
 
     def _on_update_check_succeeded(self, info: dict) -> None:
         version = str(info.get("version") or "")
-        if version and is_newer(version):
+        newer = bool(version) and is_newer(version)
+        self._window.notify_update_check_result(version or "未知", newer)
+        if newer:
             self._window.show_update_available(info)
-        else:
+        elif not self._update_check_silent:
             self._window.set_update_status(f"当前已是最新版本 v{version or '未知'}")
 
     def _on_update_check_failed(self, message: str) -> None:
+        if self._update_check_silent:
+            logger.info("[Update] silent startup check failed: %s", message)
+            return
         self._window.set_update_status(f"检查更新失败：{message}")
 
     def _on_update_download_requested(self, url: str, version: str) -> None:
