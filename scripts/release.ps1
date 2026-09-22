@@ -23,7 +23,7 @@ try {
     Set-Content -Path (Join-Path $root "clipboard_manager\version.py") -Value "APP_VERSION = `"$Version`"" -Encoding UTF8
 
     Write-Output "==> 2/5 打包（先结束运行中的 ClipNest）"
-    taskkill /F /IM ClipNest.exe 2>$null | Out-Null
+    cmd /c "taskkill /F /IM ClipNest.exe >nul 2>&1"
     Start-Sleep -Seconds 2
     & $pythonPath -m PyInstaller --noconfirm ClipNest.spec
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed." }
