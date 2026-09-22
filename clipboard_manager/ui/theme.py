@@ -708,6 +708,9 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
             background: {footer_bg};
             border-top: 1px solid {tokens.panel_border};
         }}
+        QLabel#settingsApplyStatus {{
+            color: {tokens.text_secondary};
+        }}
         QPushButton#colorPickButton {{
             text-align: left;
             padding: 5px 12px 5px 8px;

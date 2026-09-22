@@ -5,6 +5,7 @@ import logging
 import re
 import sys
 import time
+from dataclasses import replace
 from typing import Any, Optional
 
 from PySide6.QtCore import (
@@ -68,7 +69,9 @@ from PySide6.QtWidgets import (
 from ..models import ClipItem, Tab
 from ..config import APP_NAME, MAX_ITEMS_PER_TAB
 from ..icon_utils import resolve_app_icon
+from ..services.update_service import is_frozen
 from .settings_dialog import SettingsDialog
+from .update_dialog import UpdateDialog
 from .dialog_base import ResizableDialog, set_dialog_titlebar_theme
 from .image_mixin import ImageMimeMixin
 from .image_codec import encode_qimage_to_payload
@@ -1175,6 +1178,9 @@ class MainWindow(QMainWindow):
     autostart_change_requested = Signal(bool)
     window_shown = Signal()
     settings_save_requested = Signal(object)
+    check_update_requested = Signal()
+    update_download_requested = Signal(str, str)
+    update_install_requested = Signal(str, str)
 
     def __init__(self) -> None:
         super().__init__()
@@ -1182,6 +1188,8 @@ class MainWindow(QMainWindow):
         self.resize(980, 620)
         self._apply_app_icon()
         self._hotkey_text = ""
+        self._active_settings_dialog: Optional[SettingsDialog] = None
+        self._update_dialog: Optional[UpdateDialog] = None
         self._capture_tab_text = "未设置"
         self._capture_tab_id: Optional[int] = None
         self._capture_tab_max: int = MAX_ITEMS_PER_TAB
@@ -1419,7 +1427,14 @@ class MainWindow(QMainWindow):
             pinned_color=self._pinned_accent_color,
             tabs=[(tab.id, tab.name) for tab in self._tabs_snapshot],
         )
-        if self._exec_modal_dialog(dialog) != QDialog.DialogCode.Accepted:
+        self._active_settings_dialog = dialog
+        dialog.apply_requested.connect(self._on_settings_apply_requested)
+        dialog.check_update_requested.connect(self.check_update_requested.emit)
+        try:
+            accepted = self._exec_modal_dialog(dialog)
+        finally:
+            self._active_settings_dialog = None
+        if accepted != QDialog.DialogCode.Accepted:
             return
         if dialog.export_requested():
             self.export_requested.emit()
@@ -1428,6 +1443,51 @@ class MainWindow(QMainWindow):
             self.import_requested.emit()
             return
         self.settings_save_requested.emit(dialog.result_payload())
+
+    def _on_settings_apply_requested(self, payload) -> None:
+        self.settings_save_requested.emit(replace(payload, apply_only=True))
+
+    def show_settings_apply_result(self, messages: list[str]) -> None:
+        dialog = self._active_settings_dialog
+        if dialog is None:
+            return
+        text = "已应用" if not messages else "已应用：" + "；".join(messages)
+        dialog.set_apply_feedback(text)
+
+    def set_update_status(self, text: str) -> None:
+        dialog = self._active_settings_dialog
+        if dialog is not None:
+            dialog.set_update_status(text)
+
+    def show_update_available(self, info: dict) -> None:
+        if self._update_dialog is not None:
+            self._update_dialog.close()
+            self._update_dialog.deleteLater()
+        dialog = UpdateDialog(self, info, frozen=is_frozen())
+        dialog.download_requested.connect(self.update_download_requested.emit)
+        dialog.install_requested.connect(self.update_install_requested.emit)
+        dialog.finished.connect(self._on_update_dialog_closed)
+        self._update_dialog = dialog
+        dialog.open()
+
+    def _on_update_dialog_closed(self, _result: int) -> None:
+        if self._update_dialog is not None:
+            self._update_dialog.deleteLater()
+            self._update_dialog = None
+
+    def show_update_progress(self, received: int, total: int) -> None:
+        if self._update_dialog is not None:
+            self._update_dialog.set_progress(received, total)
+
+    def show_update_ready(self, zip_path: str, version: str) -> None:
+        if self._update_dialog is not None:
+            self._update_dialog.set_ready(zip_path, version)
+
+    def show_update_error(self, message: str) -> None:
+        if self._update_dialog is not None:
+            self._update_dialog.set_failed(message)
+        else:
+            self.show_error(f"检查更新失败：{message}")
 
     def set_tabs(self, tabs: list[Tab], active_tab_id: Optional[int]) -> None:
         self._tabs_snapshot = list(tabs)

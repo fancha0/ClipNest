@@ -18,6 +18,7 @@ from .services.focus_service import FocusService, FocusTarget
 from .services.hotkey_service import HotkeyService
 from .services.paste_service import PasteService
 from .services.autostart_service import AutoStartService
+from .services.update_service import UpdateService, is_newer
 from .ui.main_window import MainWindow
 from .ui.dialog_base import load_dialog_sizes_from_setting, dump_dialog_sizes_to_setting
 from .ui.theme import (
@@ -49,6 +50,8 @@ class AppController:
         self._hotkey_service = hotkey_service
         self._paste_service = paste_service
         self._autostart_service = AutoStartService()
+        self._update_service = UpdateService()
+        self._update_zip_path = ""
         self._pending_focus_target: Optional[FocusTarget] = None
         self._auto_hide_on_paste = AUTO_HIDE_ON_PASTE
         self._capture_tab_id: Optional[int] = None
@@ -181,6 +184,14 @@ class AppController:
         self._window.splitter_sizes_changed.connect(self._on_splitter_sizes_changed)
         self._window.start_inline_edit_requested.connect(self._on_start_inline_edit)
         self._window.save_inline_edit_requested.connect(self._on_save_inline_edit)
+        self._window.check_update_requested.connect(self._on_check_update_requested)
+        self._window.update_download_requested.connect(self._on_update_download_requested)
+        self._window.update_install_requested.connect(self._on_update_install_requested)
+        self._update_service.check_succeeded.connect(self._on_update_check_succeeded)
+        self._update_service.check_failed.connect(self._on_update_check_failed)
+        self._update_service.download_progress.connect(self._window.show_update_progress)
+        self._update_service.download_succeeded.connect(self._on_update_download_succeeded)
+        self._update_service.download_failed.connect(self._on_update_download_failed)
 
     def _parse_int_setting(self, key: str) -> Optional[int]:
         value = self._repository.get_setting(key)
@@ -871,11 +882,12 @@ class AppController:
         if not isinstance(payload, SettingsPayload):
             return
         messages: list[str] = []
+        errors: list[str] = []
 
         if payload.hotkey and payload.hotkey != self._hotkey_service.hotkey_text:
             normalized, error = HotkeyService.normalize_hotkey(payload.hotkey)
             if error or not normalized:
-                messages.append(f"快捷键无效：{error or '未知错误'}（未修改）")
+                errors.append(f"快捷键无效：{error or '未知错误'}（未修改）")
             else:
                 ok, start_error = self._hotkey_service.update_hotkey(normalized)
                 if ok:
@@ -883,7 +895,7 @@ class AppController:
                     self._window.set_hotkey_text(normalized)
                     messages.append(f"全局快捷键已更新为 {normalized}")
                 else:
-                    messages.append(
+                    errors.append(
                         f"应用快捷键失败：{start_error or '未知错误'}（已回滚）"
                     )
 
@@ -900,7 +912,7 @@ class AppController:
                     f"监听存储标签已设置为：{self._tab_name(tabs, payload.capture_tab_id)}"
                 )
             else:
-                messages.append("监听存储标签无效（未修改）")
+                errors.append("监听存储标签无效（未修改）")
 
         if self._capture_tab_id is not None and payload.capture_tab_max > 0:
             old_value = self._repository.get_tab_capacity(self._capture_tab_id)
@@ -922,7 +934,7 @@ class AppController:
         if payload.autostart != self._autostart_service.is_enabled():
             error = self._autostart_service.set_enabled(payload.autostart)
             if error:
-                messages.append(f"设置开机自启失败：{error}（未修改）")
+                errors.append(f"设置开机自启失败：{error}（未修改）")
             else:
                 self._window.set_autostart_state(payload.autostart)
                 messages.append(
@@ -954,8 +966,42 @@ class AppController:
             self._on_pinned_color_change_requested(payload.pinned_color)
             messages.append(f"置顶颜色已更新为 {payload.pinned_color}")
 
-        if messages:
-            self._window.show_info("设置已保存：\n" + "\n".join(messages))
+        if errors:
+            self._window.show_error("\n".join(errors))
+        if payload.apply_only:
+            self._window.show_settings_apply_result(messages)
+
+    def _on_check_update_requested(self) -> None:
+        self._update_service.check_async()
+
+    def _on_update_check_succeeded(self, info: dict) -> None:
+        version = str(info.get("version") or "")
+        if version and is_newer(version):
+            self._window.show_update_available(info)
+        else:
+            self._window.set_update_status(f"当前已是最新版本 v{version or '未知'}")
+
+    def _on_update_check_failed(self, message: str) -> None:
+        self._window.set_update_status(f"检查更新失败：{message}")
+
+    def _on_update_download_requested(self, url: str, version: str) -> None:
+        self._update_service.download_async(url, version)
+
+    def _on_update_download_succeeded(self, zip_path: str, version: str) -> None:
+        self._update_zip_path = zip_path
+        self._window.show_update_ready(zip_path, version)
+
+    def _on_update_download_failed(self, message: str) -> None:
+        self._window.show_update_error(message)
+
+    def _on_update_install_requested(self, zip_path: str, _version: str) -> None:
+        ok, error = self._update_service.apply_update(zip_path or self._update_zip_path)
+        if not ok:
+            self._window.show_error(f"安装更新失败：{error}")
+            return
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.quit()
 
     def _load_tab_capacities(self) -> None:
         raw = self._repository.get_setting("tab_capacity_overrides") or ""

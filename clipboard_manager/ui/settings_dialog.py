@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Optional
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 from .theme import AppearanceSettings, default_appearance_settings, normalize_theme_mode
 from .dialog_base import ResizableDialog
 from .settings_widgets import ColorPickButton, SettingRow, SettingsSection
+from ..version import APP_VERSION
 
 PRESET_COLORS = {
     "简约浅灰": ("#f6f8fb", "#ffffff", "#eef7ff"),
@@ -38,6 +39,16 @@ THEME_MODE_LABELS = {
     "light": "浅色",
     "dark": "深色",
 }
+
+
+def _to_qt_hotkey_text(hotkey_text: str) -> str:
+    """Translate the service-layer "Win" modifier to Qt's "Meta" for display.
+
+    QKeySequence cannot round-trip "Win+<key>" (it parses but renders an empty
+    string), while normalize_hotkey stores the Windows key as "Win".
+    """
+    parts = [part.strip() for part in str(hotkey_text or "").split("+") if part.strip()]
+    return "+".join("Meta" if part.lower() == "win" else part for part in parts)
 
 NAV_PAGES = (
     ("通用", "\u2699"),
@@ -58,12 +69,16 @@ class SettingsPayload:
     note_color: str
     note_font_size: int
     pinned_color: str
+    apply_only: bool = False
 
 
 class SettingsDialog(ResizableDialog):
     _size_key = "settings"
     _default_size = (720, 560)
     _min_size = (620, 460)
+
+    apply_requested = Signal(object)
+    check_update_requested = Signal()
 
     def __init__(
         self,
@@ -135,10 +150,15 @@ class SettingsDialog(ResizableDialog):
         footer_layout = QHBoxLayout(footer)
         footer_layout.setContentsMargins(18, 12, 18, 12)
         footer_layout.setSpacing(8)
+        self.apply_status_label = QLabel(footer)
+        self.apply_status_label.setObjectName("settingsApplyStatus")
+        footer_layout.addWidget(self.apply_status_label)
         footer_layout.addStretch(1)
 
         buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel,
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Apply
+            | QDialogButtonBox.StandardButton.Cancel,
             parent=footer,
         )
         save_btn = buttons.button(QDialogButtonBox.StandardButton.Save)
@@ -146,6 +166,10 @@ class SettingsDialog(ResizableDialog):
             save_btn.setText("保存")
             save_btn.setObjectName("primaryButton")
             save_btn.setDefault(True)
+        apply_btn = buttons.button(QDialogButtonBox.StandardButton.Apply)
+        if apply_btn is not None:
+            apply_btn.setText("应用")
+            apply_btn.clicked.connect(self._on_apply_clicked)
         cancel_btn = buttons.button(QDialogButtonBox.StandardButton.Cancel)
         if cancel_btn is not None:
             cancel_btn.setText("取消")
@@ -186,7 +210,7 @@ class SettingsDialog(ResizableDialog):
         self.hotkey_edit.setMaximumSequenceLength(1)
         self.hotkey_edit.setFixedWidth(190)
         if self._hotkey_initial:
-            self.hotkey_edit.setKeySequence(QKeySequence(self._hotkey_initial))
+            self.hotkey_edit.setKeySequence(QKeySequence(_to_qt_hotkey_text(self._hotkey_initial)))
 
         self.capture_tab_combo = QComboBox(page)
         self.capture_tab_combo.setFixedWidth(190)
@@ -239,6 +263,19 @@ class SettingsDialog(ResizableDialog):
             )
         )
         layout.addWidget(capture_section)
+
+        about_section = SettingsSection("关于", page)
+        self.check_update_btn = QPushButton("检查更新", page)
+        self.check_update_btn.setFixedWidth(120)
+        self.check_update_btn.clicked.connect(self._on_check_update_clicked)
+        about_section.add_row(
+            SettingRow(
+                "软件更新",
+                self.check_update_btn,
+                f"当前版本 v{APP_VERSION}。检查并安装最新版本。",
+            )
+        )
+        layout.addWidget(about_section)
         layout.addStretch(1)
         return page
 
@@ -435,6 +472,27 @@ class SettingsDialog(ResizableDialog):
         self.item_selected_bg_btn.set_color(self._appearance.item_selected_bg)
 
     # ---------- results ----------
+
+    def _on_apply_clicked(self) -> None:
+        self.apply_requested.emit(self.result_payload())
+
+    def set_apply_feedback(self, text: str) -> None:
+        self.apply_status_label.setText(text)
+        generation = getattr(self, "_apply_feedback_generation", 0) + 1
+        self._apply_feedback_generation = generation
+
+        def _clear() -> None:
+            if getattr(self, "_apply_feedback_generation", 0) == generation:
+                self.apply_status_label.clear()
+
+        QTimer.singleShot(5000, _clear)
+
+    def _on_check_update_clicked(self) -> None:
+        self.set_apply_feedback("正在检查更新...")
+        self.check_update_requested.emit()
+
+    def set_update_status(self, text: str) -> None:
+        self.set_apply_feedback(text)
 
     def export_requested(self) -> bool:
         return bool(getattr(self, "_export_requested", False))
