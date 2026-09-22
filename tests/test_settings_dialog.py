@@ -96,5 +96,36 @@ class SettingsDialogApplyTests(unittest.TestCase):
         self.assertFalse(dialog.result_payload().auto_check_update)
 
 
+class ToggleSwitchTests(unittest.TestCase):
+    def test_toggle_state_and_signal(self) -> None:
+        from PySide6.QtWidgets import QApplication
+
+        from clipboard_manager.ui.settings_widgets import ToggleSwitch
+
+        QApplication.instance() or QApplication([])
+        switch = ToggleSwitch()
+        self.assertFalse(switch.isChecked())
+        received: list[bool] = []
+        switch.toggled.connect(received.append)
+        switch.setChecked(True)
+        self.assertTrue(switch.isChecked())
+        switch.setChecked(False)
+        self.assertFalse(switch.isChecked())
+        self.assertEqual(received, [True, False])
+
+    def test_duplicate_set_checked_emits_no_signal(self) -> None:
+        from PySide6.QtWidgets import QApplication
+
+        from clipboard_manager.ui.settings_widgets import ToggleSwitch
+
+        QApplication.instance() or QApplication([])
+        switch = ToggleSwitch()
+        received: list[bool] = []
+        switch.toggled.connect(received.append)
+        switch.setChecked(True)
+        switch.setChecked(True)
+        self.assertEqual(received, [True])
+
+
 if __name__ == "__main__":
     unittest.main()

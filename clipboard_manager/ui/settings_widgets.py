@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QRectF, QSize, Qt, QVariantAnimation, Signal
 from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
@@ -12,6 +12,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from .theme import current_theme_tokens
 
 
 def make_color_chip_icon(color_hex: str, size: int = 18) -> QIcon:
@@ -85,6 +87,106 @@ class ColorPickButton(QPushButton):
 
     def color_hex(self) -> str:
         return self._color_hex
+
+
+class ToggleSwitch(QWidget):
+    """Windows 11 style toggle: pill track + sliding knob, drawn with theme colors."""
+
+    toggled = Signal(bool)
+
+    _TRACK_W = 42
+    _TRACK_H = 22
+    _KNOB = 16
+    _MARGIN = 3
+    _ACCENT = ("#2f7cd6", "#2f7fb8")
+    _TRACK_OFF = ("#cfd8e3", "#4a5768")
+    _TRACK_OFF_HOVER = ("#c2cdd9", "#566477")
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._checked = False
+        self._position = 0.0
+        self._hovered = False
+        self.setFixedSize(self._TRACK_W + 2, self._TRACK_H + 2)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._anim = QVariantAnimation(self)
+        self._anim.setDuration(140)
+        self._anim.valueChanged.connect(self._on_position)
+        self._start_anim()
+
+    def _on_position(self, value) -> None:
+        self._position = float(value)
+        self.update()
+
+    def _start_anim(self) -> None:
+        self._anim.stop()
+        self._anim.setStartValue(self._position)
+        self._anim.setEndValue(1.0 if self._checked else 0.0)
+        self._anim.start()
+
+    def isChecked(self) -> bool:
+        return self._checked
+
+    def setChecked(self, checked: bool) -> None:
+        checked = bool(checked)
+        if checked == self._checked:
+            return
+        self._checked = checked
+        self._start_anim()
+        self.toggled.emit(checked)
+
+    def _toggle(self) -> None:
+        self.setChecked(not self._checked)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._toggle()
+            return
+        super().mousePressEvent(event)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self._toggle()
+            return
+        super().keyPressEvent(event)
+
+    def enterEvent(self, event) -> None:
+        self._hovered = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._hovered = False
+        self.update()
+        super().leaveEvent(event)
+
+    def paintEvent(self, _event) -> None:
+        tokens = current_theme_tokens()
+        dark = bool(getattr(tokens, "is_dark", False))
+        index = 1 if dark else 0
+        accent = QColor(self._ACCENT[index])
+        if self._checked:
+            track = accent.lighter(108) if self._hovered else accent
+        else:
+            off = QColor(self._TRACK_OFF_HOVER[index] if self._hovered else self._TRACK_OFF[index])
+            track = off
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(Qt.PenStyle.NoPen)
+        track_rect = QRectF(1, 1, self._TRACK_W, self._TRACK_H)
+        painter.setBrush(track)
+        painter.drawRoundedRect(track_rect, self._TRACK_H / 2.0, self._TRACK_H / 2.0)
+
+        span = self._TRACK_W - self._KNOB - self._MARGIN * 2
+        knob_x = self._MARGIN + self._position * span
+        knob_y = (self._TRACK_H - self._KNOB) / 2.0
+        knob_rect = QRectF(1 + knob_x, 1 + knob_y, self._KNOB, self._KNOB)
+        painter.setBrush(QColor("#ffffff"))
+        painter.setPen(QPen(QColor(0, 0, 0, 26 if dark else 38), 1))
+        painter.drawEllipse(knob_rect)
+        painter.end()
 
 
 class SettingRow(QFrame):

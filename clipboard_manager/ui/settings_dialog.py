@@ -6,7 +6,6 @@ from typing import Optional
 from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QKeySequence
 from PySide6.QtWidgets import (
-    QCheckBox,
     QColorDialog,
     QComboBox,
     QDialogButtonBox,
@@ -25,7 +24,7 @@ from PySide6.QtWidgets import (
 
 from .theme import AppearanceSettings, default_appearance_settings, normalize_theme_mode
 from .dialog_base import ResizableDialog
-from .settings_widgets import ColorPickButton, SettingRow, SettingsSection
+from .settings_widgets import ColorPickButton, SettingRow, SettingsSection, ToggleSwitch
 from ..version import APP_VERSION
 
 PRESET_COLORS = {
@@ -232,7 +231,7 @@ class SettingsDialog(ResizableDialog):
         self.capture_max_spin.setFixedWidth(120)
         self.capture_max_spin.setValue(int(self._capture_max_initial))
 
-        self.autostart_chk = QCheckBox(page)
+        self.autostart_chk = ToggleSwitch(page)
         self.autostart_chk.setChecked(bool(self._autostart_initial))
 
         section = SettingsSection("快捷键与启动", page)
@@ -322,9 +321,9 @@ class SettingsDialog(ResizableDialog):
         color_section.add_row(SettingRow("选中条目背景", self.item_selected_bg_btn))
         layout.addWidget(color_section)
 
-        self.show_scrollbar_chk = QCheckBox(page)
+        self.show_scrollbar_chk = ToggleSwitch(page)
         self.show_scrollbar_chk.setChecked(bool(self._appearance.show_scrollbar))
-        self.antialias_chk = QCheckBox(page)
+        self.antialias_chk = ToggleSwitch(page)
         self.antialias_chk.setChecked(bool(self._appearance.item_antialias))
 
         reset_btn = QPushButton("重置外观为默认", page)
@@ -428,7 +427,7 @@ class SettingsDialog(ResizableDialog):
         self.check_update_btn.setFixedWidth(120)
         self.check_update_btn.clicked.connect(self._on_check_update_clicked)
 
-        self.auto_update_chk = QCheckBox(page)
+        self.auto_update_chk = ToggleSwitch(page)
         self.auto_update_chk.setChecked(self._auto_check_update_initial)
 
         section = SettingsSection("软件更新", page)

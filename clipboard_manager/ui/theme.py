@@ -352,7 +352,17 @@ def build_theme_tokens(_theme_mode: str = "") -> ThemeTokens:
     return build_theme_tokens_from_appearance(default_appearance_settings())
 
 
+_LATEST_TOKENS: ThemeTokens | None = None
+
+
+def current_theme_tokens() -> ThemeTokens:
+    """Most recent tokens passed to build_app_stylesheet (theme-aware painting)."""
+    return _LATEST_TOKENS or default_light_business_theme()
+
+
 def build_app_stylesheet(tokens: ThemeTokens) -> str:
+    global _LATEST_TOKENS
+    _LATEST_TOKENS = tokens
     scroll_v_size = "8px" if tokens.show_scrollbar else "0px"
     scroll_h_size = "8px" if tokens.show_scrollbar else "0px"
     handle_v_min = "32px" if tokens.show_scrollbar else "0px"
