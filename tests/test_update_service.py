@@ -94,5 +94,45 @@ class HttpJsonTests(unittest.TestCase):
         self.assertEqual(data["version"], "0.2.0")
 
 
+class SslDefenseTests(unittest.TestCase):
+    def test_sanitize_ssl_env_removes_stale_paths(self) -> None:
+        import os
+        from unittest import mock
+
+        from clipboard_manager.services import update_service
+
+        env = {
+            "SSL_CERT_FILE": r"C:\gone\cacert.pem",
+            "SSL_CERT_DIR": r"C:\gone\certs",
+            "REQUESTS_CA_BUNDLE": r"C:\gone\bundle.pem",
+            "PATH": os.environ.get("PATH", ""),
+        }
+        with mock.patch.dict(os.environ, env, clear=True):
+            update_service._sanitize_ssl_env()
+            self.assertNotIn("SSL_CERT_FILE", os.environ)
+            self.assertNotIn("SSL_CERT_DIR", os.environ)
+            self.assertNotIn("REQUESTS_CA_BUNDLE", os.environ)
+            self.assertIn("PATH", os.environ)
+
+    def test_sanitize_ssl_env_keeps_existing_paths(self) -> None:
+        import os
+        import tempfile
+        from unittest import mock
+
+        from clipboard_manager.services import update_service
+
+        with tempfile.NamedTemporaryFile(suffix=".pem") as tmp:
+            with mock.patch.dict(os.environ, {"SSL_CERT_FILE": tmp.name}, clear=True):
+                update_service._sanitize_ssl_env()
+                self.assertEqual(os.environ["SSL_CERT_FILE"], tmp.name)
+
+    def test_build_ssl_context_returns_context(self) -> None:
+        from clipboard_manager.services import update_service
+
+        context = update_service._build_ssl_context()
+        self.assertIsInstance(context, update_service.ssl.SSLContext)
+        self.assertTrue(context.check_hostname)
+
+
 if __name__ == "__main__":
     unittest.main()

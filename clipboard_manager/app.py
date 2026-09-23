@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import logging
+from logging.handlers import RotatingFileHandler
 
 from PySide6.QtWidgets import QApplication
 
-from .config import APP_NAME, database_path
+from .config import APP_NAME, database_path, log_file_path
 from .controller import AppController
 from .icon_utils import resolve_app_icon, set_windows_app_user_model_id
 from .repository import ClipRepository
@@ -15,11 +16,25 @@ from .services.paste_service import PasteService
 from .ui.main_window import MainWindow
 
 
+def _attach_file_logging() -> None:
+    try:
+        handler = RotatingFileHandler(
+            log_file_path(), maxBytes=1024 * 1024, backupCount=2, encoding="utf-8"
+        )
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+        )
+        logging.getLogger().addHandler(handler)
+    except OSError:
+        logging.getLogger(__name__).debug("file logging unavailable", exc_info=True)
+
+
 def run() -> int:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    _attach_file_logging()
     app = QApplication([])
     app.setApplicationName(APP_NAME)
     set_windows_app_user_model_id()

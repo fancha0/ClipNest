@@ -1013,7 +1013,10 @@ class AppController:
         if self._update_check_silent:
             logger.info("[Update] silent startup check failed: %s", message)
             return
-        self._window.set_update_status(f"检查更新失败：{message}")
+        self._window.set_update_status(
+            f"检查更新失败：{message}"
+            "（如装有杀毒软件/安全管家，请将 ClipNest 加入信任区后重试）"
+        )
 
     def _on_update_download_requested(self, url: str, version: str) -> None:
         self._update_service.download_async(url, version)

@@ -44,3 +44,9 @@ def database_path() -> Path:
     data_dir = app_data_dir()
     data_dir.mkdir(parents=True, exist_ok=True)
     return data_dir / "clipboard.db"
+
+
+def log_file_path() -> Path:
+    data_dir = app_data_dir()
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return data_dir / "clipnest.log"

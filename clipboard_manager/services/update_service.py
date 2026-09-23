@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -15,6 +17,41 @@ from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 from ..version import APP_VERSION
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_ssl_env() -> None:
+    """Drop leftover SSL env vars pointing at files that no longer exist.
+
+    Machines that once had Anaconda/Git or similar tools often keep
+    SSL_CERT_FILE / SSL_CERT_DIR / REQUESTS_CA_BUNDLE pointing into an
+    uninstalled program folder, which breaks HTTPS requests.
+    """
+    for key in ("SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE"):
+        path = os.environ.get(key)
+        if path and not os.path.exists(path):
+            logger.warning("[Update] ignoring stale %s=%s", key, path)
+            os.environ.pop(key, None)
+
+
+def _build_ssl_context() -> ssl.SSLContext:
+    """Default context; falls back to the Windows certificate store directly."""
+    _sanitize_ssl_env()
+    try:
+        return ssl.create_default_context()
+    except Exception:
+        logger.exception("[Update] create_default_context failed, using Windows store")
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = True
+    context.verify_mode = ssl.CERT_REQUIRED
+    if sys.platform == "win32":
+        try:
+            for storename in ("CA", "ROOT"):
+                for cert, encoding, _trust in ssl.enum_certificates(storename):
+                    if encoding == "x509_asn":
+                        context.load_verify_locations(cadata=cert)
+        except Exception:
+            logger.exception("[Update] loading Windows certificate store failed")
+    return context
 
 _REPO = "fancha0/ClipNest"
 _API_URL = f"https://api.github.com/repos/{_REPO}/releases/latest"
@@ -82,7 +119,9 @@ def _http_json(url: str) -> dict:
             "Accept": "application/json",
         },
     )
-    with urllib.request.urlopen(request, timeout=_REQUEST_TIMEOUT) as response:
+    with urllib.request.urlopen(
+        request, timeout=_REQUEST_TIMEOUT, context=_build_ssl_context()
+    ) as response:
         return json.loads(response.read().decode("utf-8-sig"))
 
 
@@ -118,13 +157,13 @@ class _CheckTask(QRunnable):
                     return
                 errors.append("更新清单格式异常")
             except Exception as exc:
-                logger.warning("[Update] manifest check failed: %s", exc)
+                logger.exception("[Update] manifest check failed")
                 errors.append(str(exc))
 
         try:
             release = _http_json(_API_URL)
         except Exception as exc:
-            logger.warning("[Update] github check failed: %s", exc)
+            logger.exception("[Update] github check failed")
             errors.append(str(exc))
             self._signals.failed.emit("；".join(errors))
             return
@@ -166,7 +205,9 @@ class _DownloadTask(QRunnable):
             request = urllib.request.Request(
                 self._url, headers={"User-Agent": "ClipNest"}
             )
-            with urllib.request.urlopen(request, timeout=_REQUEST_TIMEOUT) as response:
+            with urllib.request.urlopen(
+                request, timeout=_REQUEST_TIMEOUT, context=_build_ssl_context()
+            ) as response:
                 total = int(response.headers.get("Content-Length") or 0)
                 received = 0
                 with open(zip_path, "wb") as output:
@@ -180,7 +221,7 @@ class _DownloadTask(QRunnable):
             logger.info("[Update] downloaded %s -> %s", self._version, zip_path)
             self._signals.finished.emit(zip_path, self._version)
         except Exception as exc:
-            logger.warning("[Update] download failed: %s", exc)
+            logger.exception("[Update] download failed")
             self._signals.failed.emit(str(exc))
 
 
