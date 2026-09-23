@@ -127,5 +127,30 @@ class ToggleSwitchTests(unittest.TestCase):
         self.assertEqual(received, [True])
 
 
+class SettingsSectionCardTests(unittest.TestCase):
+    def test_rows_share_one_card_with_separators(self) -> None:
+        from PySide6.QtWidgets import QApplication, QWidget
+
+        from clipboard_manager.ui.settings_widgets import SettingRow, SettingsSection
+
+        QApplication.instance() or QApplication([])
+        section = SettingsSection("测试分组")
+        section.add_row(SettingRow("选项 A", QWidget()))
+        section.add_row(SettingRow("选项 B", QWidget()))
+        separators = [
+            child
+            for child in section._card.children()
+            if getattr(child, "objectName", lambda: "")() == "settingRowSeparator"
+        ]
+        self.assertEqual(section._row_count, 2)
+        self.assertEqual(len(separators), 1)
+
+    def test_nav_items_have_icons(self) -> None:
+        dialog = SettingsDialogApplyTests._make_dialog()
+        for i in range(dialog.nav_list.count()):
+            with self.subTest(index=i):
+                self.assertFalse(dialog.nav_list.item(i).icon().isNull())
+
+
 if __name__ == "__main__":
     unittest.main()

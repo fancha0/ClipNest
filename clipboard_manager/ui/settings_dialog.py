@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Optional
 
-from PySide6.QtCore import QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QKeySequence
+from PySide6.QtCore import QPointF, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QIcon, QKeySequence, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QColorDialog,
     QComboBox,
@@ -22,7 +22,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .theme import AppearanceSettings, default_appearance_settings, normalize_theme_mode
+from .theme import (
+    AppearanceSettings,
+    current_theme_tokens,
+    default_appearance_settings,
+    normalize_theme_mode,
+)
 from .dialog_base import ResizableDialog
 from .settings_widgets import ColorPickButton, SettingRow, SettingsSection, ToggleSwitch
 from ..version import APP_VERSION
@@ -50,12 +55,61 @@ def _to_qt_hotkey_text(hotkey_text: str) -> str:
     return "+".join("Meta" if part.lower() == "win" else part for part in parts)
 
 NAV_PAGES = (
-    ("通用", "⚙"),
-    ("外观", "\U0001F3A8"),
-    ("备注与置顶", "\U0001F4CC"),
-    ("数据", "\U0001F4BE"),
-    ("关于", "ℹ"),
+    ("通用", "general"),
+    ("外观", "appearance"),
+    ("备注与置顶", "note"),
+    ("数据", "data"),
+    ("关于", "about"),
 )
+
+
+def _create_nav_icon(kind: str, dark: bool) -> QIcon:
+    """Hand-drawn 16x16 line icons so the nav renders consistently everywhere."""
+    pixmap = QPixmap(16, 16)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    color = QColor("#9fb0c6") if dark else QColor("#5a6a7e")
+    pen = QPen(color)
+    pen.setWidthF(1.6)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+
+    if kind == "general":
+        painter.drawEllipse(4.5, 4.5, 7, 7)
+        painter.drawEllipse(6.9, 6.9, 2.2, 2.2)
+        painter.drawLine(8.0, 1.5, 8.0, 3.0)
+        painter.drawLine(8.0, 13.0, 8.0, 14.5)
+        painter.drawLine(1.5, 8.0, 3.0, 8.0)
+        painter.drawLine(13.0, 8.0, 14.5, 8.0)
+        painter.drawLine(3.6, 3.6, 4.6, 4.6)
+        painter.drawLine(11.4, 11.4, 12.4, 12.4)
+        painter.drawLine(3.6, 12.4, 4.6, 11.4)
+        painter.drawLine(11.4, 4.6, 12.4, 3.6)
+    elif kind == "appearance":
+        painter.drawEllipse(3.0, 3.0, 10, 10)
+        painter.setBrush(color)
+        painter.drawEllipse(QPointF(5.8, 6.2), 1.0, 1.0)
+        painter.drawEllipse(QPointF(9.8, 6.6), 1.0, 1.0)
+        painter.drawEllipse(QPointF(7.2, 10.2), 1.0, 1.0)
+    elif kind == "note":
+        painter.drawEllipse(4.0, 3.5, 4.5, 4.5)
+        painter.drawEllipse(5.4, 4.9, 1.7, 1.7)
+        painter.drawLine(8.3, 7.8, 12.3, 11.8)
+        painter.drawLine(10.6, 9.4, 12.6, 7.4)
+    elif kind == "data":
+        painter.drawRoundedRect(2.5, 3.5, 11, 9, 2.0, 2.0)
+        painter.drawLine(5.0, 6.0, 8.0, 6.0)
+        painter.drawEllipse(9.6, 8.4, 2.0, 2.0)
+    else:
+        painter.drawEllipse(2.5, 2.5, 11, 11)
+        painter.setBrush(color)
+        painter.drawEllipse(QPointF(8.0, 5.4), 1.0, 1.0)
+        painter.drawLine(8.0, 8.0, 8.0, 11.2)
+
+    painter.end()
+    return QIcon(pixmap)
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,8 +187,10 @@ class SettingsDialog(ResizableDialog):
         self.nav_list.setSpacing(2)
         self.nav_list.setIconSize(QSize(16, 16))
         self.nav_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        for label, glyph in NAV_PAGES:
-            item = QListWidgetItem(f"{glyph}   {label}")
+        dark = bool(getattr(current_theme_tokens(), "is_dark", False))
+        for label, kind in NAV_PAGES:
+            item = QListWidgetItem(label)
+            item.setIcon(_create_nav_icon(kind, dark))
             item.setSizeHint(QSize(0, 38))
             self.nav_list.addItem(item)
         body.addWidget(self.nav_list)
@@ -195,20 +251,28 @@ class SettingsDialog(ResizableDialog):
         return scroll
 
     @staticmethod
-    def _new_page(title: str) -> tuple[QWidget, QVBoxLayout]:
+    def _new_page(title: str, subtitle: str = "") -> tuple[QWidget, QVBoxLayout]:
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(22, 20, 22, 20)
-        layout.setSpacing(14)
+        layout.setContentsMargins(24, 22, 24, 22)
+        layout.setSpacing(16)
+        header_box = QVBoxLayout()
+        header_box.setContentsMargins(0, 0, 0, 2)
+        header_box.setSpacing(2)
         header = QLabel(title, page)
         header.setObjectName("settingsPageTitle")
-        layout.addWidget(header)
+        header_box.addWidget(header)
+        if subtitle:
+            sub = QLabel(subtitle, page)
+            sub.setObjectName("settingsPageSubtitle")
+            header_box.addWidget(sub)
+        layout.addLayout(header_box)
         return page, layout
 
     # ---------- pages ----------
 
     def _build_general_page(self) -> QWidget:
-        page, layout = self._new_page("通用")
+        page, layout = self._new_page("通用", "快捷键、开机启动与剪贴板监听")
 
         self.hotkey_edit = QKeySequenceEdit(page)
         self.hotkey_edit.setMaximumSequenceLength(1)
@@ -271,7 +335,7 @@ class SettingsDialog(ResizableDialog):
         return page
 
     def _build_appearance_page(self) -> QWidget:
-        page, layout = self._new_page("外观")
+        page, layout = self._new_page("外观", "主题模式、配色与显示效果")
 
         self.theme_mode_combo = QComboBox(page)
         self.theme_mode_combo.setFixedWidth(150)
@@ -341,7 +405,7 @@ class SettingsDialog(ResizableDialog):
         return page
 
     def _build_note_page(self) -> QWidget:
-        page, layout = self._new_page("备注与置顶")
+        page, layout = self._new_page("备注与置顶", "备注文字与置顶标记样式")
 
         self.note_color_btn = ColorPickButton(self._note_color, page)
         self.note_color_btn.clicked.connect(self._pick_note_color)
@@ -370,7 +434,7 @@ class SettingsDialog(ResizableDialog):
         return page
 
     def _build_data_page(self) -> QWidget:
-        page, layout = self._new_page("数据")
+        page, layout = self._new_page("数据", "备份与迁移")
 
         export_btn = QPushButton("导出…", page)
         export_btn.clicked.connect(self._request_export)
@@ -402,7 +466,7 @@ class SettingsDialog(ResizableDialog):
         return page
 
     def _build_about_page(self) -> QWidget:
-        page, layout = self._new_page("关于")
+        page, layout = self._new_page("关于", "版本信息与软件更新")
 
         header = QHBoxLayout()
         icon_label = QLabel(page)
@@ -521,12 +585,17 @@ class SettingsDialog(ResizableDialog):
 
     def set_apply_feedback(self, text: str) -> None:
         self.apply_status_label.setText(text)
+        self.apply_status_label.setToolTip(text)
+        self.apply_status_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
         generation = getattr(self, "_apply_feedback_generation", 0) + 1
         self._apply_feedback_generation = generation
 
         def _clear() -> None:
             if getattr(self, "_apply_feedback_generation", 0) == generation:
                 self.apply_status_label.clear()
+                self.apply_status_label.setToolTip("")
 
         QTimer.singleShot(5000, _clear)
 

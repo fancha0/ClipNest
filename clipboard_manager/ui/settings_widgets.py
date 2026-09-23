@@ -226,7 +226,10 @@ class SettingRow(QFrame):
 
 
 class SettingsSection(QWidget):
-    """A titled group of setting rows."""
+    """A titled group of setting rows: gray title above one rounded card.
+
+    Rows share a single card and are separated by hairlines (Windows 11 style).
+    """
 
     def __init__(self, title: str = "", parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -238,8 +241,23 @@ class SettingsSection(QWidget):
             header.setObjectName("settingSectionTitle")
             self._layout.addWidget(header)
 
+        self._card = QFrame(self)
+        self._card.setObjectName("settingsSectionCard")
+        self._card_layout = QVBoxLayout(self._card)
+        self._card_layout.setContentsMargins(0, 0, 0, 0)
+        self._card_layout.setSpacing(0)
+        self._layout.addWidget(self._card)
+        self._row_count = 0
+
     def add_row(self, row: QWidget) -> None:
-        self._layout.addWidget(row)
+        if self._row_count > 0:
+            separator = QFrame(self._card)
+            separator.setObjectName("settingRowSeparator")
+            separator.setFixedHeight(1)
+            self._card_layout.addWidget(separator)
+        self._row_count += 1
+        row.setParent(self._card)
+        self._card_layout.addWidget(row)
 
     def add_widget(self, widget: QWidget) -> None:
         self._layout.addWidget(widget)

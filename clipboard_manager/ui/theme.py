@@ -684,6 +684,7 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
         QListWidget#settingsNav::item:selected {{
             background: {tab_selected_bg};
             border: 1px solid {tab_selected_border};
+            border-left: 3px solid {accent_bg};
             color: {tokens.text_primary};
         }}
         QStackedWidget#settingsPages, QScrollArea#settingsScroll {{
@@ -692,9 +693,13 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
         }}
         QLabel#settingsPageTitle {{
             color: {tokens.text_primary};
-            font-size: {tokens.base_font_size + 5}px;
+            font-size: {tokens.base_font_size + 6}px;
             font-weight: 600;
             padding-bottom: 2px;
+        }}
+        QLabel#settingsPageSubtitle {{
+            color: {tokens.text_secondary};
+            font-size: {max(10, tokens.base_font_size - 1)}px;
         }}
         QLabel#settingSectionTitle {{
             color: {tokens.text_secondary};
@@ -702,10 +707,24 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
             font-weight: 600;
             padding: 6px 2px 2px 2px;
         }}
-        QFrame#settingRow {{
+        QFrame#settingsSectionCard {{
             background: {row_bg};
             border: 1px solid {row_border};
-            border-radius: 6px;
+            border-radius: 8px;
+        }}
+        QFrame#settingRow {{
+            background: transparent;
+            border: none;
+            border-radius: 7px;
+        }}
+        QFrame#settingRow:hover {{
+            background: {nav_hover_bg};
+        }}
+        QFrame#settingRowSeparator {{
+            background: {tokens.panel_border};
+            border: none;
+            margin-left: 14px;
+            margin-right: 14px;
         }}
         QLabel#settingRowTitle {{
             color: {tokens.text_primary};
