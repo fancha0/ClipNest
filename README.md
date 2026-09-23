@@ -1,96 +1,77 @@
-# ClipNest 剪贴板管理工具
+# ClipNest
 
-ClipNest 是一个基于 PySide6 + SQLite 的本地剪贴板管理工具，支持 Windows 和 macOS，用来保存、分类、搜索和快速粘贴常用内容。
+现代化 Windows 剪贴板管理工具：自动记录剪贴板历史，标签页分组管理，全局快捷键呼出，回车即粘贴。支持应用内一键自动更新。
 
-## 主要功能
+## ✨ 功能特性
 
-- 实时监听并保存剪贴板文本。
-- 支持图片剪贴板内容采集和本地保存。
-- 支持富文本、图文、文件、URL 等多种剪贴板内容。
-- 支持标签页分类管理，例如常用语、代码、地址、账号等。
-- 支持手动新建、编辑、删除、移动条目。
-- 支持条目置顶，置顶内容始终显示在当前标签页顶部。
-- 支持右键菜单操作，包括编辑、删除、置顶、取消置顶等。
-- 点击条目后自动写入剪贴板并粘贴到当前窗口。
-- 支持自定义全局快捷键。
-- 支持窗口置顶、窗口尺寸和布局记忆。
-- 使用 SQLite 本地持久化存储。
+- 📋 **剪贴板历史** — 自动记录文本、图片、文件、富文本、图文等内容
+- 🗂 **标签页分类** — 常用语、代码、地址、账号等分组管理
+- ⚡ **快速粘贴** — 全局快捷键呼出，按数字键 1-9 或方向键选择，回车直接粘贴到目标窗口
+- 🔍 **全局搜索** — Ctrl+F 秒搜全部条目
+- 📌 **置顶与备注** — 重要条目置顶，备注支持自定义颜色与字号
+- 🎨 **主题** — 浅色 / 深色 / 跟随系统，Windows 11 风格设置界面
+- 🔄 **应用内自动更新** — 检查更新 → 下载 → 自动安装并重启，全程一键
+- 💾 **数据管理** — SQLite 本地存储，支持打包导出 / 导入（.fluxpkg），换机无忧
+- 🖥 **系统托盘** — 常驻后台，随用随呼
 
-## 快速开始
+## 📦 安装
 
-推荐 Python 版本：`3.10 - 3.12`
+1. 从 [Releases](https://github.com/fancha0/ClipNest/releases/latest) 下载 `ClipNest-Windows.zip`
+2. 解压到任意目录（无需安装，便携运行）
+3. 运行 `ClipNest.exe`
+4. （可选）设置 → 通用 → 开启「开机自动启动」
 
-```bash
-pip install -r requirements.txt
-python main.py
-```
+> 首次运行时 Windows SmartScreen 可能提示「未知发布者」，点击「更多信息」→「仍要运行」即可。
 
-## 默认行为
+## ⌨️ 快捷键
 
-- 默认标签页：`常用语 / 代码 / 地址 / 账号`
-- 每个标签页默认最多保存：`100` 条
-- 默认全局快捷键：
-  - Windows：`Ctrl+Shift+V`
-  - macOS：`Cmd+Shift+V`
-- 按一次快捷键打开主窗口，再按一次隐藏到后台托盘。
+| 快捷键 | 功能 |
+| --- | --- |
+| `Ctrl+Shift+V`（默认，可自定义） | 呼出 / 隐藏主窗口 |
+| `Ctrl+F` | 聚焦搜索框 |
+| `Ctrl+N` | 新建条目 |
+| `1` ~ `9` | 直接粘贴列表第 N 条 |
+| `Enter` | 粘贴当前选中条目 |
+| `Esc` | 清除搜索 / 返回列表 |
 
-## 数据说明
+全局快捷键可在「设置 → 通用」中自定义（至少需要一个修饰键）。
 
-- 数据保存在本机 SQLite 数据库中。
-- 剪贴板内容不会上传到服务器。
-- 如果换电脑使用，需要单独备份本机数据库和配置文件。
-- macOS 上使用全局快捷键和模拟粘贴时，可能需要开启辅助功能权限。
+## 🔄 自动更新
 
-## Windows 打包
+「设置 → 关于」中点击**检查更新**，或开启**启动时自动检查**（默认开启）：发现新版本时自动弹出更新窗口，一键下载、自动安装并重启。
 
-使用项目自带脚本：
+## ❓ 常见问题
+
+**数据存储在哪里？会联网吗？**
+数据保存在本机 `%APPDATA%\ClipNest\clipboard.db`（从旧版升级的用户在 `%APPDATA%\CrossClipboard\`）。纯本地 SQLite 存储，除检查更新外不进行任何网络传输。
+
+**杀毒软件提示风险？**
+个人开发者应用未购买代码签名证书，可能被部分杀毒软件误报。将 ClipNest 所在目录加入信任区即可。
+
+**快捷键没有反应？**
+多半是被其他软件占用了（例如 `Win+V` 是 Windows 自带的剪贴板历史）。请在「设置 → 通用」中更换快捷键。
+
+**如何排查异常？**
+日志文件位于数据目录下的 `clipnest.log`。反馈问题时请附上相关日志片段。
+
+## 🛠 开发
+
+- 技术栈：Python 3.13 + PySide6 + SQLite
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build_windows.ps1
-```
+# 运行（开发模式）
+python main.py
 
-可选图标：
-
-- 优先放置：`assets\clipnest.ico`
-- 或放置：`assets\clipnest.png`，脚本会自动转换为 ico。
-
-输出位置：
-
-- 程序目录：`dist\ClipNest\`
-- 可执行文件：`dist\ClipNest\ClipNest.exe`
-- 压缩包：`dist\ClipNest.zip`
-
-## macOS 打包
-
-> macOS `.app` 不能在 Windows 上直接构建，需要在 macOS 电脑上运行脚本。
-
-```bash
-chmod +x ./scripts/build_macos.sh
-./scripts/build_macos.sh
-```
-
-输出位置：
-
-- App：`release/macos/ClipNest.app`
-- 压缩包：`release/macos/ClipNest_macOS.zip`
-
-可选图标：
-
-- 放置：`assets/clipnest.icns`
-
-## 开发说明
-
-常用检查命令：
-
-```bash
-python -m compileall clipboard_manager tests
+# 运行测试
 python -m unittest discover -s tests
+
+# 打包 exe
+.\scripts\build_windows.ps1
 ```
 
-项目主要目录：
+- 代码结构：`clipboard_manager/` 下分为 `ui`（界面）、`services`（剪贴板/热键/粘贴/更新服务）、`controller`（业务协调）、`repository`（数据层）
+- 一键发版：`.\scripts\release.ps1`（打包 + 上传更新服务器 + GitHub Release）
 
-- `clipboard_manager/`：主程序代码
-- `clipboard_manager/services/`：剪贴板采集、解析、粘贴等服务
-- `clipboard_manager/ui/`：界面相关代码
-- `tests/`：单元测试
-- `scripts/`：打包脚本
+## 📄 许可
+
+本项目暂未选择开源许可证，代码仅供学习与个人使用。
