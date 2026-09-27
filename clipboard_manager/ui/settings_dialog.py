@@ -130,9 +130,9 @@ class SettingsPayload:
 
 
 class SettingsDialog(ResizableDialog):
-    _size_key = "settings"
-    _default_size = (720, 560)
-    _min_size = (620, 460)
+    _size_key = "settings_v2"
+    _default_size = (820, 680)
+    _min_size = (700, 560)
 
     apply_requested = Signal(object)
     check_update_requested = Signal()
