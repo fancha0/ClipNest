@@ -7,6 +7,7 @@ from PySide6.QtGui import QColor
 
 from clipboard_manager.ui.settings_dialog import PRESET_COLORS
 from clipboard_manager.ui.theme import (
+    build_app_stylesheet,
     build_theme_tokens_from_appearance,
     default_appearance_settings,
 )
@@ -37,6 +38,17 @@ class LightPaletteDerivationTests(unittest.TestCase):
         bg = QColor(tokens.input_selection_bg)
         fg = QColor(tokens.input_selection_text)
         self.assertGreater(abs(bg.lightness() - fg.lightness()), 60)
+
+
+class StylesheetBuildTests(unittest.TestCase):
+    def test_build_app_stylesheet_runs_for_light_and_dark(self) -> None:
+        light = build_theme_tokens_from_appearance(default_appearance_settings())
+        dark = build_theme_tokens_from_appearance(
+            dataclasses.replace(default_appearance_settings(), window_bg="#1f2530")
+        )
+        for tokens in (light, dark):
+            css = build_app_stylesheet(tokens)
+            self.assertIn("QMainWindow", css)
 
 
 class PresetTests(unittest.TestCase):

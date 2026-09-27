@@ -394,7 +394,7 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
         nav_hover_bg = "rgba(15, 23, 42, 12)"
         row_bg = tokens.input_bg
         row_border = tokens.input_border
-        footer_bg = tokens.disabled_bg
+        footer_bg = tokens.menu_item_disabled_bg
     return f"""
         QMainWindow {{
             background: {tokens.main_window_bg};
