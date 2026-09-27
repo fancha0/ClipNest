@@ -33,9 +33,11 @@ from .settings_widgets import ColorPickButton, SettingRow, SettingsSection, Togg
 from ..version import APP_VERSION
 
 PRESET_COLORS = {
-    "简约浅灰": ("#f6f8fb", "#ffffff", "#eef7ff"),
-    "商务蓝灰": ("#eef2f7", "#ffffff", "#dbeafe"),
-    "高对比": ("#ffffff", "#ffffff", "#cde8ff"),
+    "简约白": ("#f6f8fb", "#ffffff", "#dbeafe"),
+    "石墨夜": ("#1f2530", "#28303f", "#2e6da4"),
+    "护眼豆沙": ("#e9f1ea", "#ffffff", "#a9cdb4"),
+    "商务蓝灰": ("#e8edf5", "#ffffff", "#b7d0f0"),
+    "高对比白": ("#ffffff", "#ffffff", "#9ec9f5"),
 }
 
 THEME_MODE_LABELS = {
@@ -378,8 +380,14 @@ class SettingsDialog(ResizableDialog):
             btn.clicked.connect(lambda _=False, name=preset_name: self._apply_preset(name))
             preset_layout.addWidget(btn)
 
-        color_section = SettingsSection("配色（浅色模式生效）", page)
-        color_section.add_row(SettingRow("预设配色", preset_widget, "一键套用推荐的配色组合。"))
+        color_section = SettingsSection("配色", page)
+        color_section.add_row(
+            SettingRow(
+                "预设配色",
+                preset_widget,
+                "一键套用推荐配色；「石墨夜」为深色主题，仅在浅色模式下生效。",
+            )
+        )
         color_section.add_row(SettingRow("窗口背景", self.window_bg_btn))
         color_section.add_row(SettingRow("条目背景", self.item_bg_btn))
         color_section.add_row(SettingRow("选中条目背景", self.item_selected_bg_btn))

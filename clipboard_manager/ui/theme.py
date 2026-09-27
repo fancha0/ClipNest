@@ -29,7 +29,7 @@ def default_appearance_settings() -> AppearanceSettings:
         window_bg="#f6f8fb",
         font_size=13,
         item_bg="#ffffff",
-        item_selected_bg="#eef7ff",
+        item_selected_bg="#dbeafe",
         show_scrollbar=True,
         item_antialias=True,
     )
@@ -238,21 +238,21 @@ def build_theme_tokens_from_appearance(appearance: AppearanceSettings) -> ThemeT
     else:
         text_primary = "#1f2937"
         text_secondary = "#7b8493"
-        panel_bg = "#fbfcfe"
-        panel_border = "#e8edf4"
-        input_bg = "#ffffff"
-        input_border = "#e0e7f0"
+        panel_bg = _rgb_to_hex(_lighten(window_rgb, 0.04))
+        panel_border = _rgb_to_hex(_lighten(window_rgb, 0.16))
+        input_bg = _rgb_to_hex(_lighten(window_rgb, 0.07))
+        input_border = _rgb_to_hex(_lighten(window_rgb, 0.20))
         input_focus = "#39a7d9"
-        selection_bg = "#dff3ff"
-        selection_text = "#172554"
-        disabled_bg = "#f4f7fb"
-        disabled_border = "#e8edf4"
-        menu_bg = "#ffffff"
-        menu_item_bg = "#ffffff"
-        scrollbar_track = "#edf2f7"
-        scrollbar_handle = "#cbd5e1"
-        scrollbar_handle_hover = "#aebccd"
-        scrollbar_handle_pressed = "#8ea0b5"
+        selection_bg = _rgb_to_hex(_darken(selected_rgb, 0.08))
+        selection_text = _contrast_text(_hex_to_rgb(selection_bg, selected_hex))
+        disabled_bg = _rgb_to_hex(_lighten(window_rgb, 0.03))
+        disabled_border = _rgb_to_hex(_lighten(window_rgb, 0.14))
+        menu_bg = _rgb_to_hex(_lighten(window_rgb, 0.06))
+        menu_item_bg = _rgb_to_hex(_lighten(window_rgb, 0.06))
+        scrollbar_track = _rgb_to_hex(_lighten(window_rgb, 0.10))
+        scrollbar_handle = _rgb_to_hex(_lighten(window_rgb, 0.26))
+        scrollbar_handle_hover = _rgb_to_hex(_lighten(window_rgb, 0.36))
+        scrollbar_handle_pressed = _rgb_to_hex(_lighten(window_rgb, 0.46))
 
     item_selected_text = _contrast_text(selected_rgb)
     primary_button_bg = _rgb_to_hex(_darken(selected_rgb, 0.18))
@@ -386,15 +386,15 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
         accent_hover_bg = "#3a88e0"
         accent_pressed_bg = "#2a6cbb"
         accent_border = "#2b71c4"
-        left_panel_bg = "#fbfcfe"
+        left_panel_bg = tokens.panel_bg
         tab_hover_bg = "rgba(15, 23, 42, 14)"
-        tab_selected_bg = "#e8f1fd"
-        tab_selected_border = "#b6d4f5"
-        nav_bg = "#f3f5f8"
+        tab_selected_bg = tokens.menu_item_selected_bg
+        tab_selected_border = tokens.menu_item_selected_border
+        nav_bg = _rgb_to_hex(_tone(_hex_to_rgb(tokens.panel_bg, "#f3f5f8"), -0.02))
         nav_hover_bg = "rgba(15, 23, 42, 12)"
-        row_bg = "#ffffff"
-        row_border = "#e6eaf0"
-        footer_bg = "#f7f9fb"
+        row_bg = tokens.input_bg
+        row_border = tokens.input_border
+        footer_bg = tokens.disabled_bg
     return f"""
         QMainWindow {{
             background: {tokens.main_window_bg};
