@@ -16,10 +16,16 @@
 
 ## 📦 安装
 
-1. 从 [Releases](https://github.com/fancha0/ClipNest/releases/latest) 下载 `ClipNest-Windows.zip`
-2. 解压到任意目录（无需安装，便携运行）
-3. 运行 `ClipNest.exe`
-4. （可选）设置 → 通用 → 开启「开机自动启动」
+**方式一：安装包（推荐）**
+
+1. 从 [Releases](https://github.com/fancha0/ClipNest/releases/latest) 下载 `ClipNest-Setup.exe`
+2. 双击运行，一路下一步即可（免管理员权限，安装到当前用户目录）
+3. 安装后开始菜单出现 ClipNest，控制面板/设置中可随时卸载
+
+**方式二：便携版**
+
+1. 下载 `ClipNest-Windows.zip`，解压到任意目录（无需安装）
+2. 运行 `ClipNest.exe`
 
 > 首次运行时 Windows SmartScreen 可能提示「未知发布者」，点击「更多信息」→「仍要运行」即可。
 

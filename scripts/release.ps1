@@ -8,7 +8,8 @@
     [string]$SshTarget = "",
     [int]$SshPort = 22,
     [string]$RemoteDir = "/www/wwwroot/clipnest/clipnest",
-    [string]$PublicBaseUrl = ""
+    [string]$PublicBaseUrl = "",
+    [string]$InnoSetup = "C:\Users\lll\Tools\Inno Setup 7\ISCC.exe"
 )
 
 $ErrorActionPreference = "Stop"
@@ -41,6 +42,18 @@ try {
     $zipMb = [math]::Round((Get-Item $zipPath).Length / 1MB, 1)
     Write-Output "    更新包：$zipPath ($zipMb MB)"
 
+    $setupPath = Join-Path $root "dist\ClipNest-Setup.exe"
+    if (Test-Path -LiteralPath $InnoSetup) {
+        Write-Output "==> 3b/5 编译安装包（Inno Setup）"
+        & $InnoSetup (Join-Path $root "installer\clipnest.iss") "/DMyAppVersion=$Version" | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Inno Setup 编译安装包失败" }
+        $setupMb = [math]::Round((Get-Item $setupPath).Length / 1MB, 1)
+        Write-Output "    安装包：$setupPath ($setupMb MB)"
+    } else {
+        Write-Output "    未找到 Inno Setup（$InnoSetup），跳过安装包编译"
+        $setupPath = $null
+    }
+
     Write-Output "==> 4/5 提交并推送 tag $tag"
     git add clipboard_manager/version.py
     git commit -m "chore: release $tag" --allow-empty
@@ -70,6 +83,11 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "上传更新包失败" }
         scp -P $SshPort $manifestPath "${SshTarget}:${RemoteDir}/latest.json"
         if ($LASTEXITCODE -ne 0) { throw "上传更新清单失败" }
+        if ($setupPath -and (Test-Path -LiteralPath $setupPath)) {
+            scp -P $SshPort $setupPath "${SshTarget}:${RemoteDir}/ClipNest-Setup.exe"
+            if ($LASTEXITCODE -ne 0) { throw "上传安装包失败" }
+            Write-Output "    安装包地址：$PublicBaseUrl/ClipNest-Setup.exe"
+        }
         Write-Output "    已上传：${SshTarget}:${RemoteDir}"
         Write-Output "    清单地址：$PublicBaseUrl/latest.json"
         Write-Output "    记得把 update_service.py 里的 UPDATE_MANIFEST_URL 设为该地址后重新打包分发。"
@@ -101,6 +119,15 @@ try {
         -ContentType "application/zip" `
         -InFile $zipPath
     Write-Output "    更新包已上传，应用内“检查更新”即可获取。"
+
+    if ($setupPath -and (Test-Path -LiteralPath $setupPath)) {
+        $setupUploadUri = "https://uploads.github.com/repos/fancha0/ClipNest/releases/$($release.id)/assets?name=ClipNest-Setup.exe"
+        Invoke-RestMethod -Method Post -Uri $setupUploadUri `
+            -Headers $headers `
+            -ContentType "application/octet-stream" `
+            -InFile $setupPath
+        Write-Output "    安装包已上传。"
+    }
 }
 finally {
     Pop-Location
