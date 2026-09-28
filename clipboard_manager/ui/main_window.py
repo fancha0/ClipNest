@@ -48,6 +48,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QInputDialog,
+    QProgressDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -2336,6 +2337,35 @@ class MainWindow(QMainWindow):
             except ValueError:
                 continue
         return selected
+
+    def show_export_progress(self) -> None:
+        self.close_export_progress()
+        progress = QProgressDialog("正在准备导出…", "", 0, 100, self)
+        progress.setObjectName("exportProgressDialog")
+        progress.setWindowTitle("导出数据")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setCancelButton(None)
+        progress.setMinimumWidth(380)
+        progress.setValue(0)
+        self._export_progress = progress
+        progress.show()
+
+    def update_export_progress(self, done: int, total: int) -> None:
+        progress = getattr(self, "_export_progress", None)
+        if progress is None:
+            return
+        if total > 0:
+            progress.setMaximum(total)
+            progress.setValue(done)
+            progress.setLabelText(f"正在导出… {done}/{total} 条")
+
+    def close_export_progress(self) -> None:
+        progress = getattr(self, "_export_progress", None)
+        self._export_progress = None
+        if progress is not None:
+            progress.close()
+            progress.deleteLater()
 
     def prompt_export_file_path(self) -> str | None:
         with self._with_auto_hide_suspended():

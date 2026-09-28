@@ -7,7 +7,7 @@ import sys
 import time
 from typing import Optional
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, Signal
 from PySide6.QtGui import QGuiApplication
 
 from .config import AUTO_HIDE_ON_PASTE, default_hotkey
@@ -31,6 +31,34 @@ from .ui.theme import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class _ExportSignals(QObject):
+    progress = Signal(int, int)
+    finished = Signal(object)
+    failed = Signal(str)
+
+
+class _ExportTask(QRunnable):
+    def __init__(self, repository, tab_ids, path, signals) -> None:
+        super().__init__()
+        self._repository = repository
+        self._tab_ids = list(tab_ids)
+        self._path = path
+        self._signals = signals
+
+    def run(self) -> None:
+        try:
+            result = self._repository.export_tabs(
+                self._tab_ids,
+                self._path,
+                progress_callback=self._signals.progress.emit,
+            )
+        except Exception as exc:
+            logger.exception("[Export] export failed")
+            self._signals.failed.emit(str(exc))
+            return
+        self._signals.finished.emit(result)
 
 
 class AppController:
@@ -1109,17 +1137,34 @@ class AppController:
         export_path = self._window.prompt_export_file_path()
         if not export_path:
             return
-        try:
-            result = self._repository.export_tabs(selected_tab_ids, export_path)
-        except Exception as exc:
-            self._window.show_error(f"导出失败：{exc}")
-            return
+
+        signals = _ExportSignals()
+        self._export_signals = signals
+        signals.progress.connect(self._on_export_progress)
+        signals.finished.connect(self._on_export_finished)
+        signals.failed.connect(self._on_export_failed)
+        self._window.show_export_progress()
+        QThreadPool.globalInstance().start(
+            _ExportTask(self._repository, selected_tab_ids, export_path, signals)
+        )
+
+    def _on_export_progress(self, done: int, total: int) -> None:
+        self._window.update_export_progress(done, total)
+
+    def _on_export_finished(self, result) -> None:
+        self._export_signals = None
+        self._window.close_export_progress()
         self._window.show_info(
             "导出完成：\n"
             f"标签页：{result.tab_count}\n"
             f"条目：{result.item_count}\n"
             f"文件：{result.path}"
         )
+
+    def _on_export_failed(self, message: str) -> None:
+        self._export_signals = None
+        self._window.close_export_progress()
+        self._window.show_error(f"导出失败：{message}")
 
     def _on_import_requested(self) -> None:
         import_path = self._window.prompt_import_file_path()

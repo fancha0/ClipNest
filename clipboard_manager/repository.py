@@ -9,7 +9,7 @@ import zipfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from PySide6.QtCore import QByteArray, QBuffer, QIODevice, Qt
 from PySide6.QtGui import QImage
@@ -503,7 +503,12 @@ class ClipRepository:
                 return candidate
             suffix += 1
 
-    def export_tabs(self, tab_ids: list[int], output_path: str) -> ExportResult:
+    def export_tabs(
+        self,
+        tab_ids: list[int],
+        output_path: str,
+        progress_callback: "Optional[Callable[[int, int], None]]" = None,
+    ) -> ExportResult:
         normalized_ids: list[int] = []
         for tab_id in tab_ids:
             try:
@@ -527,9 +532,16 @@ class ClipRepository:
             if set(normalized_ids) - set(tab_map.keys()):
                 raise ValueError("导出标签列表包含不存在的标签。")
 
+            total_items = 0
+            for tab_id in normalized_ids:
+                count_row = conn.execute(
+                    "SELECT COUNT(*) AS c FROM items WHERE tab_id = ?", (tab_id,)
+                ).fetchone()
+                total_items += int(count_row["c"])
+
             binary_refs: dict[str, str] = {}
             manifest_tabs: list[dict[str, Any]] = []
-            total_items = 0
+            exported_items = 0
 
             with zipfile.ZipFile(export_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
                 for tab_id in normalized_ids:
@@ -557,7 +569,9 @@ class ClipRepository:
                             item_row=item_row,
                         )
                         tab_payload["items"].append(item_payload)
-                        total_items += 1
+                        exported_items += 1
+                        if progress_callback is not None:
+                            progress_callback(exported_items, total_items)
                     manifest_tabs.append(tab_payload)
 
                 manifest = {
@@ -576,7 +590,7 @@ class ClipRepository:
         return ExportResult(
             path=str(export_path),
             tab_count=len(manifest_tabs),
-            item_count=total_items,
+            item_count=exported_items,
             binary_count=len(binary_refs),
         )
 
@@ -2050,7 +2064,10 @@ class ClipRepository:
         if existing:
             return existing
         ref = f"binaries/{prefix}_{payload_hash}.bin"
-        zf.writestr(ref, payload)
+        # 图片/文件本身已是压缩格式，再 deflate 只是浪费 CPU，直接存储。
+        info = zipfile.ZipInfo(ref)
+        info.compress_type = zipfile.ZIP_STORED
+        zf.writestr(info, payload)
         binary_refs[payload_hash] = ref
         return ref
 

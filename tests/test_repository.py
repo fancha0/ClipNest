@@ -395,6 +395,44 @@ class ClipRepositoryTests(unittest.TestCase):
 
         pkg_path.unlink(missing_ok=True)
 
+    def test_export_progress_callback_reports_progress(self) -> None:
+        repo = self._make_repo(self.db_path, max_items_per_tab=500)
+        tab_id = _tab_ids(repo)[0]
+        repo.upsert_text_item(tab_id, "进度回调一")
+        repo.upsert_text_item(tab_id, "进度回调二")
+        repo.upsert_image_item(tab_id, b"progress-image", "image/png", 8, 8)
+
+        calls: list[tuple[int, int]] = []
+        pkg_path = self.db_path.with_suffix(".fluxpkg")
+        result = repo.export_tabs(
+            [tab_id],
+            str(pkg_path),
+            progress_callback=lambda done, total: calls.append((done, total)),
+        )
+        self.assertEqual(len(calls), result.item_count)
+        self.assertEqual(calls[-1], (result.item_count, result.item_count))
+        self.assertTrue(all(done <= total for done, total in calls))
+        pkg_path.unlink(missing_ok=True)
+
+    def test_export_stores_binaries_without_compression(self) -> None:
+        repo = self._make_repo(self.db_path, max_items_per_tab=500)
+        tab_id = _tab_ids(repo)[0]
+        repo.upsert_image_item(tab_id, b"stored-image-payload", "image/png", 8, 8)
+
+        pkg_path = self.db_path.with_suffix(".fluxpkg")
+        repo.export_tabs([tab_id], str(pkg_path))
+
+        with zipfile.ZipFile(pkg_path, "r") as zf:
+            infos = {info.filename: info for info in zf.infolist()}
+        binary_infos = [
+            info for name, info in infos.items() if name.startswith("binaries/")
+        ]
+        self.assertTrue(binary_infos)
+        for info in binary_infos:
+            self.assertEqual(info.compress_type, zipfile.ZIP_STORED)
+        self.assertEqual(infos["manifest.json"].compress_type, zipfile.ZIP_DEFLATED)
+        pkg_path.unlink(missing_ok=True)
+
     def test_import_tabs_merge_same_name_and_dedupe(self) -> None:
         source_repo = self._make_repo(self.db_path, max_items_per_tab=500)
         source_tab_id = _tab_ids(source_repo)[0]
