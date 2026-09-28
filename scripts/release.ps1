@@ -90,14 +90,14 @@ try {
         }
         Write-Output "    已上传：${SshTarget}:${RemoteDir}"
         Write-Output "    清单地址：$PublicBaseUrl/latest.json"
-        Write-Output "    记得把 update_service.py 里的 UPDATE_MANIFEST_URL 设为该地址后重新打包分发。"
-        return
     }
 
     if (-not $env:GITHUB_TOKEN) {
-        Write-Output "    未设置 GITHUB_TOKEN，跳过自动创建 Release。"
-        Write-Output "    手动步骤：打开 https://github.com/fancha0/ClipNest/releases/new"
-        Write-Output "    选择 tag $tag，上传 $zipPath 即可。"
+        if (-not $SshTarget) {
+            Write-Output "    未设置 GITHUB_TOKEN，跳过自动创建 Release。"
+            Write-Output "    手动步骤：打开 https://github.com/fancha0/ClipNest/releases/new"
+            Write-Output "    选择 tag $tag，上传 $zipPath 即可。"
+        }
         return
     }
 
