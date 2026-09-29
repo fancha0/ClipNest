@@ -410,14 +410,13 @@ class AppController:
     def _on_tab_order_changed(self, tab_ids: list[int]) -> None:
         if not tab_ids:
             return
-        active_tab_id = self._window.current_tab_id()
+        # 注意：成功后不要刷新界面——用户刚拖完，列表顺序本就正确，
+        # 重建模型若发生在拖拽过程中会弄丢条目。仅保存数据库顺序。
         try:
             self._repository.reorder_tabs(tab_ids)
         except Exception as exc:
             self._window.show_error(f"保存标签顺序失败：{exc}")
-            self._refresh_tabs(active_tab_id=active_tab_id)
-            return
-        self._refresh_tabs(active_tab_id=active_tab_id)
+            self._refresh_tabs(active_tab_id=self._window.current_tab_id())
 
     def _on_item_order_changed(self, item_ids: list[int], tab_id: int) -> None:
         if not item_ids:
