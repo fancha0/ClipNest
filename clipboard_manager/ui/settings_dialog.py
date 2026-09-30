@@ -33,11 +33,9 @@ from .settings_widgets import ColorPickButton, SettingRow, SettingsSection, Togg
 from ..version import APP_VERSION
 
 PRESET_COLORS = {
-    "简约白": ("#f6f8fb", "#ffffff", "#dbeafe"),
     "石墨夜": ("#1f2530", "#28303f", "#2e6da4"),
     "护眼豆沙": ("#e9f1ea", "#ffffff", "#a9cdb4"),
     "商务蓝灰": ("#e8edf5", "#ffffff", "#b7d0f0"),
-    "高对比白": ("#ffffff", "#ffffff", "#9ec9f5"),
 }
 
 THEME_MODE_LABELS = {

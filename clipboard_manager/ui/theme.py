@@ -26,10 +26,10 @@ class AppearanceSettings:
 
 def default_appearance_settings() -> AppearanceSettings:
     return AppearanceSettings(
-        window_bg="#f6f8fb",
+        window_bg="#e9f1ea",
         font_size=13,
         item_bg="#ffffff",
-        item_selected_bg="#dbeafe",
+        item_selected_bg="#a9cdb4",
         show_scrollbar=True,
         item_antialias=True,
     )
@@ -368,39 +368,40 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
     handle_v_min = "32px" if tokens.show_scrollbar else "0px"
     handle_h_min = "32px" if tokens.show_scrollbar else "0px"
     if tokens.is_dark:
-        accent_bg = "#2f7fb8"
-        accent_hover_bg = "#3a8ec7"
-        accent_pressed_bg = "#2a6f9f"
-        accent_border = "#3f92c9"
-        left_panel_bg = tokens.panel_bg
+        accent_bg = "#28b7d6"
+        accent_hover_bg = "#42c9e4"
+        accent_pressed_bg = "#1694b5"
+        accent_border = "#59d4e9"
+        left_panel_bg = "rgba(15, 27, 48, 214)"
         tab_hover_bg = "rgba(255, 255, 255, 26)"
-        tab_selected_bg = tokens.item_selected_bg
-        tab_selected_border = tokens.item_selected_border
-        nav_bg = tokens.panel_bg
+        tab_selected_bg = "rgba(40, 183, 214, 54)"
+        tab_selected_border = "rgba(89, 212, 233, 138)"
+        nav_bg = "rgba(12, 24, 44, 176)"
         nav_hover_bg = "rgba(255, 255, 255, 22)"
-        row_bg = tokens.item_bg
-        row_border = tokens.item_border
-        footer_bg = tokens.panel_bg
+        row_bg = "rgba(255, 255, 255, 12)"
+        row_border = "rgba(255, 255, 255, 28)"
+        footer_bg = "rgba(12, 24, 44, 168)"
     else:
-        accent_bg = "#2f7cd6"
-        accent_hover_bg = "#3a88e0"
-        accent_pressed_bg = "#2a6cbb"
-        accent_border = "#2b71c4"
-        left_panel_bg = tokens.panel_bg
+        accent_bg = "#1677c8"
+        accent_hover_bg = "#248bdc"
+        accent_pressed_bg = "#0f62aa"
+        accent_border = "#5ab7ed"
+        left_panel_bg = "rgba(246, 250, 255, 218)"
         tab_hover_bg = "rgba(15, 23, 42, 14)"
-        tab_selected_bg = tokens.menu_item_selected_bg
-        tab_selected_border = tokens.menu_item_selected_border
-        nav_bg = _rgb_to_hex(_tone(_hex_to_rgb(tokens.panel_bg, "#f3f5f8"), -0.02))
+        tab_selected_bg = "rgba(22, 119, 200, 22)"
+        tab_selected_border = "rgba(22, 119, 200, 72)"
+        nav_bg = "rgba(232, 242, 252, 128)"
         nav_hover_bg = "rgba(15, 23, 42, 12)"
-        row_bg = tokens.input_bg
-        row_border = tokens.input_border
-        footer_bg = tokens.menu_item_disabled_bg
+        row_bg = "rgba(255, 255, 255, 142)"
+        row_border = "rgba(83, 126, 166, 56)"
+        footer_bg = "rgba(232, 242, 252, 150)"
     return f"""
         QMainWindow {{
             background: {tokens.main_window_bg};
         }}
         QWidget#rootGlass {{
-            background: {tokens.window_start};
+            background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1,
+                stop: 0 {tokens.window_start}, stop: 0.52 {tokens.window_end}, stop: 1 {tokens.main_window_bg});
         }}
         QWidget {{
             background: transparent;
@@ -490,13 +491,13 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
         }}
         QWidget#leftPanel {{
             background: {left_panel_bg};
-            border-right: 1px solid {tokens.panel_border};
-            border-radius: 0px;
+            border: 1px solid rgba(255, 255, 255, 42);
+            border-radius: 18px;
         }}
         QWidget#rightPanel {{
-            background: transparent;
-            border: none;
-            border-radius: 0px;
+            background: rgba(255, 255, 255, 24);
+            border: 1px solid rgba(255, 255, 255, 48);
+            border-radius: 18px;
         }}
         QListWidget, QTextEdit {{
             background: {tokens.input_bg};
@@ -534,14 +535,14 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
         QListWidget#tabList {{
             background: transparent;
             border: none;
-            padding: 2px 8px 2px 2px;
+            padding: 4px 8px 4px 2px;
             outline: none;
         }}
         QListWidget#tabList::item {{
             margin: 2px 6px 2px 0;
             padding: 8px 10px;
             min-height: 22px;
-            border-radius: 6px;
+            border-radius: 10px;
             background: transparent;
             border: 1px solid transparent;
             color: {tokens.text_primary};
@@ -558,7 +559,7 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
         QListWidget#itemList {{
             background: transparent;
             border: none;
-            padding: 10px 14px 14px 14px;
+            padding: 12px 16px 16px 16px;
             outline: none;
         }}
         QListWidget#itemList::item {{
@@ -613,22 +614,50 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
             background: {accent_pressed_bg};
         }}
         QLineEdit#globalSearchInput {{
-            min-height: 34px;
-            padding: 0 10px;
-            border-radius: 6px;
+            min-height: 38px;
+            padding: 0 14px;
+            border-radius: 19px;
+            background: rgba(255, 255, 255, 88);
+            border: 1px solid rgba(255, 255, 255, 150);
+            color: {tokens.text_primary};
+        }}
+        QLineEdit#globalSearchInput:hover {{
+            background: rgba(255, 255, 255, 118);
+            border-color: rgba(255, 255, 255, 190);
+        }}
+        QLineEdit#globalSearchInput:focus {{
+            background: rgba(255, 255, 255, 140);
+            border: 1px solid {accent_border};
         }}
         QToolButton {{
-            background: {tokens.tool_button_bg};
-            border: 1px solid {tokens.tool_button_border};
-            border-radius: 6px;
+            background: rgba(255, 255, 255, 72);
+            border: 1px solid rgba(255, 255, 255, 120);
+            border-radius: 12px;
             padding: 3px 6px;
         }}
         QToolButton:hover {{
-            background: {tokens.tool_button_hover_bg};
-            border-color: {tokens.tool_button_hover_border};
+            background: rgba(255, 255, 255, 132);
+            border-color: {accent_border};
         }}
         QToolButton:pressed {{
-            background: {tokens.tool_button_pressed_bg};
+            background: rgba(22, 119, 200, 80);
+        }}
+        QToolButton#addItemButton {{
+            background: transparent;
+            border: 1px solid transparent;
+        }}
+        QToolButton#addItemButton:hover {{
+            background: transparent;
+            border-color: transparent;
+        }}
+        QToolButton#settingsButton {{
+            font-size: 18px;
+            color: {tokens.text_secondary};
+        }}
+        QFrame#inlineEditorFrame {{
+            background: rgba(255, 255, 255, 42);
+            border: 1px solid rgba(255, 255, 255, 80);
+            border-radius: 14px;
         }}
         QToolButton#settingsButton::menu-indicator {{
             width: 0px;

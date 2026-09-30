@@ -52,11 +52,19 @@ class StylesheetBuildTests(unittest.TestCase):
 
 
 class PresetTests(unittest.TestCase):
-    def test_five_distinct_presets(self) -> None:
-        self.assertEqual(len(PRESET_COLORS), 5)
+    def test_three_distinct_presets(self) -> None:
+        self.assertEqual(len(PRESET_COLORS), 3)
         combos = set(PRESET_COLORS.values())
-        self.assertEqual(len(combos), 5)
+        self.assertEqual(len(combos), 3)
         self.assertIn("石墨夜", PRESET_COLORS)
+        self.assertNotIn("简约白", PRESET_COLORS)
+        self.assertNotIn("高对比白", PRESET_COLORS)
+
+    def test_default_appearance_is_eye_friendly_sand(self) -> None:
+        appearance = default_appearance_settings()
+        self.assertEqual(appearance.window_bg, "#e9f1ea")
+        self.assertEqual(appearance.item_bg, "#ffffff")
+        self.assertEqual(appearance.item_selected_bg, "#a9cdb4")
 
     def test_dark_preset_window_is_dark(self) -> None:
         window_bg, _item_bg, _selected = PRESET_COLORS["石墨夜"]
