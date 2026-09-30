@@ -29,7 +29,7 @@ try {
     Write-Output "==> 2/5 打包（先结束运行中的 ClipNest）"
     cmd /c "taskkill /F /IM ClipNest.exe >nul 2>&1"
     Start-Sleep -Seconds 2
-    & $pythonPath -m PyInstaller --noconfirm ClipNest.spec
+    & $pythonPath -m PyInstaller --noconfirm --clean ClipNest.spec
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed." }
 
     $exePath = Join-Path $root "dist\ClipNest\ClipNest.exe"
