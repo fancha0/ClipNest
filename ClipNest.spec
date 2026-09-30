@@ -29,6 +29,14 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+
+# 排除 Windows 系统 UCRT / api-set 组件：目标系统自带，
+# 随构建机打包新版反而会遮蔽系统版本，导致旧系统加载失败。
+_excluded_system_dlls = ("api-ms-win-", "ucrtbase", "ucrtbased")
+a.binaries = [
+    entry for entry in a.binaries
+    if not entry[0].lower().startswith(_excluded_system_dlls)
+]
 pyz = PYZ(a.pure)
 
 exe = EXE(
