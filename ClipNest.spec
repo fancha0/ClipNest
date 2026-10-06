@@ -4,14 +4,18 @@
 from pathlib import Path
 
 _pyside6_dir = Path(r"C:\Users\lll\Desktop\jianqieban\.venv\Lib\site-packages\PySide6")
+# 仅补充 Qt 运行时真正需要的 VC 运行库。
+# vccorlib140/vcamp140/vcomp140/concrt140/msvcp140_codecvt_ids 为
+# C++/CX、OpenMP 等组件，Qt 用不到；新版会引入旧系统缺失的依赖，
+# 曾在部分电脑上导致 “找不到指定的程序”，故不打包。
 _pyside6_runtime_dlls = [
     (str(_pyside6_dir / name), "PySide6")
     for name in (
-        "concrt140.dll",
-        "msvcp140_codecvt_ids.dll",
-        "vcamp140.dll",
-        "vccorlib140.dll",
-        "vcomp140.dll",
+        "MSVCP140.dll",
+        "MSVCP140_1.dll",
+        "MSVCP140_2.dll",
+        "VCRUNTIME140.dll",
+        "VCRUNTIME140_1.dll",
     )
     if (_pyside6_dir / name).exists()
 ]

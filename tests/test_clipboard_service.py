@@ -5,10 +5,21 @@ import unittest
 import uuid
 from pathlib import Path
 
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import QObject, QUrl, Signal
 from PySide6.QtGui import QImage
 
 from clipboard_manager.services.clipboard_parser import ClipboardContentParser
+from clipboard_manager.services.clipboard_service import ClipboardService
+
+
+class _FakeClipboard(QObject):
+    dataChanged = Signal()
+
+    def mimeData(self):
+        return None
+
+    def text(self):
+        return ""
 
 
 class _FakeMimeData:
@@ -82,6 +93,34 @@ class ClipboardParserTests(unittest.TestCase):
     def tearDown(self) -> None:
         if self._base_dir.exists():
             shutil.rmtree(self._base_dir, ignore_errors=True)
+
+    def test_self_write_suppresses_multiple_clipboard_notifications(self) -> None:
+        service = ClipboardService(_FakeClipboard())
+        captured: list[object] = []
+        service.parsed_captured.connect(captured.append)
+
+        service.suspend_once_for_image(b"image")
+        service._on_data_changed()
+        service._on_data_changed()
+        service._capture_current_clipboard()
+
+        self.assertEqual(captured, [])
+
+    def test_deferred_image_special_is_marked_for_retry(self) -> None:
+        service = ClipboardService(_FakeClipboard())
+        parsed = type("Parsed", (), {
+            "item_type": "special",
+            "mime_formats": ["application/x-qt-image"],
+        })()
+        self.assertTrue(service._is_deferred_image(parsed))
+
+    def test_normal_special_is_not_marked_for_image_retry(self) -> None:
+        service = ClipboardService(_FakeClipboard())
+        parsed = type("Parsed", (), {
+            "item_type": "special",
+            "mime_formats": ["application/x-qt-windows-mime;value=FileContents"],
+        })()
+        self.assertFalse(service._is_deferred_image(parsed))
 
     def _write_png(self, path: Path, width: int = 24, height: int = 12) -> None:
         image = QImage(width, height, QImage.Format.Format_ARGB32)

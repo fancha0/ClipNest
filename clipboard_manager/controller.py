@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -847,6 +848,18 @@ class AppController:
         self._pending_focus_target = None
 
     def _on_clipboard_parsed_captured(self, parsed: ParsedClipboardItem) -> None:
+        logger.info(
+            "[Capture] parsed type=%s formats=%s sizes=%s",
+            parsed.item_type,
+            parsed.mime_formats,
+            [
+                len(bytes(part.get("payload_blob", b"")))
+                for part in (parsed.raw_parts or [])
+            ],
+        )
+        if self._is_redundant_clipboard_capture(parsed):
+            logger.info("[Capture] skip redundant special capture")
+            return
         tab_id = self._capture_tab_id
         if tab_id is None:
             tabs = self._repository.list_tabs()
@@ -868,6 +881,61 @@ class AppController:
             self._refresh_items(tab_id)
         else:
             self._invalidate_items_cache(tab_id)
+
+    def _is_redundant_clipboard_capture(self, parsed: ParsedClipboardItem) -> bool:
+        """跳过延迟渲染导致的重复抓取。
+
+        截图工具等会先写入图片再二次重写剪贴板，系统会因此多报一次
+        “剪贴板变化”，第二次的格式集合是前一次的子集且不含新内容，
+        会被解析成“特殊内容”并顶掉真正的条目。仅当本次解析为 special、
+        且载荷哈希集合是上一次抓取的子集（3 秒窗口内）时判定为冗余。
+        """
+        now = time.monotonic()
+        current = {
+            hashlib.sha256(bytes(part["payload_blob"])).hexdigest()
+            for part in (parsed.raw_parts or [])
+            if part.get("payload_blob")
+        }
+        last = getattr(self, "_last_clipboard_capture", None)
+        current_formats = {str(fmt) for fmt in (parsed.mime_formats or [])}
+        self._last_clipboard_capture = (
+            now,
+            current,
+            parsed.item_type,
+            current_formats,
+        )
+        if parsed.item_type != "special":
+            return False
+        if last is None or not current:
+            return False
+        last_time, last_hashes, last_type, _last_formats = last
+        age = now - last_time
+        subset = bool(last_hashes) and current <= last_hashes
+        virtual_file_formats = {
+            'application/x-qt-windows-mime;value="FileGroupDescriptorW"',
+            'application/x-qt-windows-mime;value="FileContents"',
+        }
+        if (
+            last_type == "image"
+            and age <= 3.0
+            and virtual_file_formats.issubset(current_formats)
+        ):
+            logger.info(
+                "[Capture] skip screenshot virtual-file follow-up age=%.3fs",
+                age,
+            )
+            return True
+        logger.info(
+            "[Capture] redundant-check type=%s age=%.3fs current=%s last=%s subset=%s",
+            parsed.item_type,
+            age,
+            len(current),
+            len(last_hashes),
+            subset,
+        )
+        if age > 3.0 or not last_hashes:
+            return False
+        return subset
 
     def _on_hotkey_change_requested(self, raw_hotkey: str) -> None:
         normalized, error = HotkeyService.normalize_hotkey(raw_hotkey)
