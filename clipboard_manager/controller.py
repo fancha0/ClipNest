@@ -1132,8 +1132,10 @@ class AppController:
         self._window.notify_update_check_result(version or "未知", newer)
         if newer:
             self._window.show_update_available(info)
-        elif not self._update_check_silent:
-            self._window.set_update_status(f"当前已是最新版本 v{version or '未知'}")
+        else:
+            self._window.clear_update_available()
+            if not self._update_check_silent:
+                self._window.set_update_status(f"当前已是最新版本 v{version or '未知'}")
 
     def _on_update_check_failed(self, message: str) -> None:
         if self._update_check_silent:

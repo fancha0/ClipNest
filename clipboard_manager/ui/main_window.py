@@ -1186,6 +1186,7 @@ class MainWindow(QMainWindow):
         self._hotkey_text = ""
         self._active_settings_dialog: Optional[SettingsDialog] = None
         self._update_dialog: Optional[UpdateDialog] = None
+        self._latest_update_info: Optional[dict] = None
         self._auto_check_update = True
         self._diagnostic_logging = True
         self._capture_tab_text = "未设置"
@@ -1307,6 +1308,15 @@ class MainWindow(QMainWindow):
         search_icon_action.setIcon(_create_search_icon())
         search_icon_action.setToolTip("搜索全部条目（Ctrl+F）")
         self.search_input.addAction(search_icon_action, QLineEdit.ActionPosition.LeadingPosition)
+        self.search_input.setMinimumWidth(220)
+        self.search_input.setMaximumWidth(360)
+        self.update_button = QPushButton("发现更新")
+        self.update_button.setObjectName("updateButton")
+        self.update_button.setFixedHeight(34)
+        self.update_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.update_button.setToolTip("打开最新版本更新窗口")
+        self.update_button.clicked.connect(self._on_update_button_clicked)
+        self.update_button.setVisible(False)
         self.add_item_btn = QToolButton()
         self.add_item_btn.setObjectName("addItemButton")
         self.add_item_btn.setIcon(_create_add_icon())
@@ -1319,6 +1329,8 @@ class MainWindow(QMainWindow):
         self.settings_button.setToolTip("设置")
         self.settings_button.setFixedSize(QSize(38, 34))
         tools.addWidget(self.search_input, 1)
+        tools.addStretch(1)
+        tools.addWidget(self.update_button)
         tools.addWidget(self.add_item_btn)
         tools.addWidget(self.settings_button)
         right_layout.addLayout(tools)
@@ -1469,6 +1481,9 @@ class MainWindow(QMainWindow):
             dialog.set_latest_version(version, newer)
 
     def show_update_available(self, info: dict) -> None:
+        self._latest_update_info = dict(info)
+        self.update_button.setText(f"↓ 更新 v{info.get('version', '')}")
+        self.update_button.setVisible(True)
         if self._update_dialog is not None:
             self._update_dialog.close()
             self._update_dialog.deleteLater()
@@ -1478,6 +1493,15 @@ class MainWindow(QMainWindow):
         dialog.finished.connect(self._on_update_dialog_closed)
         self._update_dialog = dialog
         dialog.open()
+
+    def _on_update_button_clicked(self) -> None:
+        if self._latest_update_info is not None:
+            self.show_update_available(self._latest_update_info)
+
+    def clear_update_available(self) -> None:
+        self._latest_update_info = None
+        self.update_button.setText("发现更新")
+        self.update_button.setVisible(False)
 
     def _on_update_dialog_closed(self, _result: int) -> None:
         if self._update_dialog is not None:

@@ -257,6 +257,7 @@ class ClipItemDelegate(QStyledItemDelegate):
             fill = self._blend(base_fill, self._pinned_color, self._PINNED_TINT_RATIO)
         elif hovered:
             fill = base_fill.lighter(112) if dark else QColor(253, 254, 255)
+        fill.setAlpha(174 if selected else 158 if hovered else 142)
         painter.setBrush(fill)
 
         border = self._parse_token_color(

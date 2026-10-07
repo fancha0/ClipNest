@@ -613,20 +613,34 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
         QPushButton#primaryButton:pressed {{
             background: {accent_pressed_bg};
         }}
+        QPushButton#updateButton {{
+            background: {accent_bg};
+            color: #ffffff;
+            border: 1px solid {accent_border};
+            border-radius: 17px;
+            padding: 5px 14px;
+            font-weight: 600;
+        }}
+        QPushButton#updateButton:hover {{
+            background: {accent_hover_bg};
+        }}
+        QPushButton#updateButton:pressed {{
+            background: {accent_pressed_bg};
+        }}
         QLineEdit#globalSearchInput {{
             min-height: 38px;
             padding: 0 14px;
             border-radius: 19px;
-            background: rgba(255, 255, 255, 88);
+            background: rgba(255, 255, 255, 142);
             border: 1px solid rgba(255, 255, 255, 150);
             color: {tokens.text_primary};
         }}
         QLineEdit#globalSearchInput:hover {{
-            background: rgba(255, 255, 255, 118);
+            background: rgba(255, 255, 255, 158);
             border-color: rgba(255, 255, 255, 190);
         }}
         QLineEdit#globalSearchInput:focus {{
-            background: rgba(255, 255, 255, 140);
+            background: rgba(255, 255, 255, 174);
             border: 1px solid {accent_border};
         }}
         QToolButton {{
