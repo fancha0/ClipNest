@@ -6,6 +6,8 @@ import logging
 import re
 import sys
 import time
+import threading
+from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, Signal
@@ -47,13 +49,21 @@ class _ExportTask(QRunnable):
         self._tab_ids = list(tab_ids)
         self._path = path
         self._signals = signals
+        self._cancel_event = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancel_event.set()
 
     def run(self) -> None:
         try:
+            def progress(done: int, total: int) -> bool:
+                self._signals.progress.emit(done, total)
+                return not self._cancel_event.is_set()
+
             result = self._repository.export_tabs(
                 self._tab_ids,
                 self._path,
-                progress_callback=self._signals.progress.emit,
+                progress_callback=progress,
             )
         except Exception as exc:
             logger.exception("[Export] export failed")
@@ -756,7 +766,9 @@ class AppController:
     def _on_item_activated(self, item_id: int) -> None:
         item = self._repository.get_item(item_id)
         if item is None:
+            logger.warning("[Paste] item not found id=%s", item_id)
             return
+        logger.info("[Paste] activate id=%s type=%s", item_id, item.content_type)
         hide_window_cb = self._window.hide if self._auto_hide_on_paste else None
         if item.content_type == "image":
             payload = self._repository.get_item_payload(item_id)
@@ -842,8 +854,10 @@ class AppController:
                 hide_window=hide_window_cb,
             )
         if not pasted:
+            logger.warning("[Paste] service returned false id=%s type=%s", item_id, item.content_type)
             self._window.show_error("粘贴失败，请重试。")
             return
+        logger.info("[Paste] service accepted id=%s type=%s", item_id, item.content_type)
         self._repository.mark_item_used(item_id)
         self._pending_focus_target = None
 
@@ -859,6 +873,9 @@ class AppController:
         )
         if self._is_redundant_clipboard_capture(parsed):
             logger.info("[Capture] skip redundant special capture")
+            return
+        if self._is_duplicate_rendered_capture(parsed):
+            logger.info("[Capture] skip duplicate rendered text/html capture")
             return
         tab_id = self._capture_tab_id
         if tab_id is None:
@@ -936,6 +953,19 @@ class AppController:
         if age > 3.0 or not last_hashes:
             return False
         return subset
+
+    def _is_duplicate_rendered_capture(self, parsed: ParsedClipboardItem) -> bool:
+        if parsed.item_type not in {"html", "text"}:
+            self._last_rendered_capture = None
+            return False
+        value = (parsed.plain_text or parsed.display_text or "").strip()
+        now = time.monotonic()
+        previous = getattr(self, "_last_rendered_capture", None)
+        self._last_rendered_capture = (now, value)
+        if not value or previous is None:
+            return False
+        previous_time, previous_value = previous
+        return now - previous_time <= 0.8 and previous_value == value
 
     def _on_hotkey_change_requested(self, raw_hotkey: str) -> None:
         normalized, error = HotkeyService.normalize_hotkey(raw_hotkey)
@@ -1210,16 +1240,21 @@ class AppController:
         signals.progress.connect(self._on_export_progress)
         signals.finished.connect(self._on_export_finished)
         signals.failed.connect(self._on_export_failed)
-        self._window.show_export_progress()
-        QThreadPool.globalInstance().start(
-            _ExportTask(self._repository, selected_tab_ids, export_path, signals)
-        )
+        task = _ExportTask(self._repository, selected_tab_ids, export_path, signals)
+        self._export_task = task
+        self._export_path = export_path
+        self._export_started_at = time.monotonic()
+        self._window.show_export_progress(task.cancel)
+        QThreadPool.globalInstance().start(task)
 
     def _on_export_progress(self, done: int, total: int) -> None:
-        self._window.update_export_progress(done, total)
+        self._window.update_export_progress(
+            done, total, getattr(self, "_export_started_at", None)
+        )
 
     def _on_export_finished(self, result) -> None:
         self._export_signals = None
+        self._export_task = None
         self._window.close_export_progress()
         self._window.show_info(
             "导出完成：\n"
@@ -1230,7 +1265,14 @@ class AppController:
 
     def _on_export_failed(self, message: str) -> None:
         self._export_signals = None
+        self._export_task = None
         self._window.close_export_progress()
+        export_path = getattr(self, "_export_path", None)
+        if message == "导出已取消。":
+            if export_path:
+                Path(export_path).expanduser().unlink(missing_ok=True)
+            self._window.show_info("导出已取消。")
+            return
         self._window.show_error(f"导出失败：{message}")
 
     def _on_import_requested(self) -> None:

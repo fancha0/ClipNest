@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import time
 import logging
+import os
+import ctypes
+from ctypes import wintypes
 
 from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtGui import QClipboard
@@ -13,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 class ClipboardService(QObject):
     parsed_captured = Signal(object)
-    SELF_WRITE_SUPPRESSION_SECONDS = 0.8
+    SELF_WRITE_SUPPRESSION_SECONDS = 0.35
     DEFERRED_IMAGE_RETRY_MS = 150
     DEFERRED_IMAGE_MAX_RETRIES = 2
 
@@ -23,6 +26,7 @@ class ClipboardService(QObject):
         self._suppress_until = 0.0
         self._capture_debounce_ms = 100
         self._capture_generation = 0
+        self._pending_source_app: str | None = None
         self._capture_timer = QTimer(self)
         self._capture_timer.setSingleShot(True)
         self._capture_timer.timeout.connect(self._capture_current_clipboard)
@@ -49,6 +53,7 @@ class ClipboardService(QObject):
         # 多个剪贴板软件可能在几十毫秒内连续重写同一份内容。
         # 等待最后一次变化后再读取，既不屏蔽其他软件，也避免重复记录。
         self._capture_generation += 1
+        self._pending_source_app = self._foreground_app_name()
         self._capture_timer.start(self._capture_debounce_ms)
 
     def _capture_current_clipboard(
@@ -84,7 +89,36 @@ class ClipboardService(QObject):
             )
             return
 
+        parsed.source_app = self._pending_source_app
         self.parsed_captured.emit(parsed)
+
+    @staticmethod
+    def _foreground_app_name() -> str | None:
+        if os.name != "nt":
+            return None
+        try:
+            user32 = ctypes.windll.user32
+            kernel32 = ctypes.windll.kernel32
+            hwnd = user32.GetForegroundWindow()
+            if not hwnd:
+                return None
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            process = kernel32.OpenProcess(0x1000 | 0x0400, False, pid.value)
+            if not process:
+                return None
+            try:
+                buffer = ctypes.create_unicode_buffer(1024)
+                size = wintypes.DWORD(len(buffer))
+                if not kernel32.QueryFullProcessImageNameW(
+                    process, 0, buffer, ctypes.byref(size)
+                ):
+                    return None
+                return os.path.basename(buffer.value[: size.value]) or None
+            finally:
+                kernel32.CloseHandle(process)
+        except Exception:
+            return None
 
     @staticmethod
     def _is_deferred_image(parsed) -> bool:

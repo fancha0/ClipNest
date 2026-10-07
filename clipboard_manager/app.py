@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from logging.handlers import RotatingFileHandler
 
 from PySide6.QtWidgets import QApplication
@@ -17,6 +18,9 @@ from .ui.main_window import MainWindow
 
 
 def _attach_file_logging() -> None:
+    enabled = os.environ.get("CLIPNEST_DIAGNOSTIC_LOG", "1").strip().lower()
+    if enabled in {"0", "false", "off", "no"}:
+        return
     try:
         handler = RotatingFileHandler(
             log_file_path(), maxBytes=1024 * 1024, backupCount=2, encoding="utf-8"

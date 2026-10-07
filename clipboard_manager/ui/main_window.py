@@ -2334,9 +2334,9 @@ class MainWindow(QMainWindow):
                 continue
         return selected
 
-    def show_export_progress(self) -> None:
+    def show_export_progress(self, cancel_callback=None) -> None:
         self.close_export_progress()
-        progress = QProgressDialog("正在准备导出…", "", 0, 100, self)
+        progress = QProgressDialog("正在准备导出…", "取消导出", 0, 100, self)
         progress.setObjectName("exportProgressDialog")
         progress.setWindowTitle("导出数据")
         progress.setWindowModality(Qt.WindowModality.WindowModal)
@@ -2344,17 +2344,31 @@ class MainWindow(QMainWindow):
         progress.setCancelButton(None)
         progress.setMinimumWidth(380)
         progress.setValue(0)
+        if cancel_callback is not None:
+            progress.canceled.connect(cancel_callback)
         self._export_progress = progress
         progress.show()
 
-    def update_export_progress(self, done: int, total: int) -> None:
+    def update_export_progress(
+        self, done: int, total: int, started_at: float | None = None
+    ) -> None:
         progress = getattr(self, "_export_progress", None)
         if progress is None:
             return
         if total > 0:
             progress.setMaximum(total)
             progress.setValue(done)
-            progress.setLabelText(f"正在导出… {done}/{total} 条")
+            label = f"正在导出… {done}/{total} 条"
+            if started_at is not None and done > 0 and total > done:
+                elapsed = max(0.0, time.monotonic() - started_at)
+                seconds_left = int(elapsed * (total - done) / done)
+                label += f"，预计剩余 {seconds_left // 60} 分 {seconds_left % 60} 秒"
+            progress.setLabelText(label)
+
+    def set_export_cancel_callback(self, cancel_callback) -> None:
+        progress = getattr(self, "_export_progress", None)
+        if progress is not None:
+            progress.canceled.connect(cancel_callback)
 
     def close_export_progress(self) -> None:
         progress = getattr(self, "_export_progress", None)

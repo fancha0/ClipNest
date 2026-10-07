@@ -39,6 +39,8 @@ def present_item(item: ClipItem) -> DisplayRow:
     secondary_segments.append(time_text)
     if meta_text:
         secondary_segments.append(meta_text)
+    if item.source_app:
+        secondary_segments.append(f"来自 {item.source_app}")
     secondary = " · ".join(segment for segment in secondary_segments if segment)
 
     tooltip_sections: list[str] = []
@@ -53,6 +55,8 @@ def present_item(item: ClipItem) -> DisplayRow:
         tooltip_sections.append("\n".join(item.file_paths))
     if item.content_type in {"special", "raw_snapshot"} and item.mime_formats:
         tooltip_sections.append("格式：\n" + "\n".join(item.mime_formats))
+    if item.source_app:
+        tooltip_sections.append(f"来源应用：{item.source_app}")
     tooltip = "\n---\n".join(section for section in tooltip_sections if section) or content
 
     icon_kind, file_icon_path = _resolve_icon(item)

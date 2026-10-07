@@ -507,7 +507,7 @@ class ClipRepository:
         self,
         tab_ids: list[int],
         output_path: str,
-        progress_callback: "Optional[Callable[[int, int], None]]" = None,
+        progress_callback: "Optional[Callable[[int, int], bool | None]]" = None,
     ) -> ExportResult:
         normalized_ids: list[int] = []
         for tab_id in tab_ids:
@@ -571,7 +571,9 @@ class ClipRepository:
                         tab_payload["items"].append(item_payload)
                         exported_items += 1
                         if progress_callback is not None:
-                            progress_callback(exported_items, total_items)
+                            keep_going = progress_callback(exported_items, total_items)
+                            if keep_going is False:
+                                raise InterruptedError("导出已取消。")
                     manifest_tabs.append(tab_payload)
 
                 manifest = {

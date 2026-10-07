@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import html as html_lib
 import hashlib
+import logging
 import sys
 from typing import Callable, Optional
 
@@ -12,6 +13,8 @@ from pynput.keyboard import Controller, Key
 
 from .clipboard_service import ClipboardService
 from .focus_service import FocusService, FocusTarget
+
+logger = logging.getLogger(__name__)
 
 
 class PasteService:
@@ -36,15 +39,17 @@ class PasteService:
         if text.strip() == "":
             return False
 
-        self._clipboard_service.suspend_once_for_text(text)
-        self._clipboard.setText(text)
+        def write_clipboard() -> None:
+            self._clipboard_service.suspend_once_for_text(text)
+            self._clipboard.setText(text)
 
         if hide_window:
             hide_window()
 
         if target:
-            QTimer.singleShot(80, lambda: self._restore_and_paste(target))
+            QTimer.singleShot(80, lambda: self._restore_and_paste(target, write_clipboard))
         else:
+            write_clipboard()
             QTimer.singleShot(80, self._send_paste_shortcut)
         return True
 
@@ -69,15 +74,17 @@ class PasteService:
             # Basic fallback for targets that only use plain text.
             mime.setText(html_value)
 
-        self._clipboard_service.suspend_once_for_snapshot()
-        self._clipboard.setMimeData(mime)
+        def write_clipboard() -> None:
+            self._clipboard_service.suspend_once_for_snapshot()
+            self._clipboard.setMimeData(mime)
 
         if hide_window:
             hide_window()
 
         if target:
-            QTimer.singleShot(80, lambda: self._restore_and_paste(target))
+            QTimer.singleShot(80, lambda: self._restore_and_paste(target, write_clipboard))
         else:
+            write_clipboard()
             QTimer.singleShot(80, self._send_paste_shortcut)
         return True
 
@@ -91,17 +98,22 @@ class PasteService:
             return False
         image = QImage()
         if not image.loadFromData(image_bytes, "PNG"):
+            logger.warning("[Paste] image payload cannot be decoded, bytes=%s", len(image_bytes))
             return False
 
-        self._clipboard_service.suspend_once_for_image(image_bytes)
-        self._clipboard.setImage(image)
+        logger.info("[Paste] image write bytes=%s target=%s", len(image_bytes), bool(target))
+        def write_clipboard() -> None:
+            logger.info("[Paste] image write bytes=%s target=%s", len(image_bytes), bool(target))
+            self._clipboard_service.suspend_once_for_image(image_bytes)
+            self._clipboard.setImage(image)
 
         if hide_window:
             hide_window()
 
         if target:
-            QTimer.singleShot(80, lambda: self._restore_and_paste(target))
+            QTimer.singleShot(80, lambda: self._restore_and_paste(target, write_clipboard))
         else:
+            write_clipboard()
             QTimer.singleShot(80, self._send_paste_shortcut)
         return True
 
@@ -120,15 +132,17 @@ class PasteService:
         # Extra text fallback keeps compatibility in apps that ignore file object paste.
         mime.setText("\n".join(clean_paths))
 
-        self._clipboard_service.suspend_once_for_snapshot()
-        self._clipboard.setMimeData(mime)
+        def write_clipboard() -> None:
+            self._clipboard_service.suspend_once_for_snapshot()
+            self._clipboard.setMimeData(mime)
 
         if hide_window:
             hide_window()
 
         if target:
-            QTimer.singleShot(80, lambda: self._restore_and_paste(target))
+            QTimer.singleShot(80, lambda: self._restore_and_paste(target, write_clipboard))
         else:
+            write_clipboard()
             QTimer.singleShot(80, self._send_paste_shortcut)
         return True
 
@@ -255,32 +269,54 @@ class PasteService:
         if not mime.formats():
             return False
 
-        self._clipboard_service.suspend_once_for_snapshot()
-        self._clipboard.setMimeData(mime)
+        def write_clipboard() -> None:
+            self._clipboard_service.suspend_once_for_snapshot()
+            self._clipboard.setMimeData(mime)
 
         if hide_window:
             hide_window()
 
         if target:
-            QTimer.singleShot(80, lambda: self._restore_and_paste(target))
+            QTimer.singleShot(80, lambda: self._restore_and_paste(target, write_clipboard))
         else:
+            write_clipboard()
             QTimer.singleShot(80, self._send_paste_shortcut)
         return True
 
-    def _restore_and_paste(self, target: FocusTarget) -> None:
+    def _restore_and_paste(
+        self,
+        target: FocusTarget,
+        before_paste: Optional[Callable[[], None]] = None,
+    ) -> None:
         restored = self._focus_service.restore_target(target)
         delay = 150 if restored else 20
-        QTimer.singleShot(delay, self._send_paste_shortcut)
+        logger.info("[Paste] restore target restored=%s delay_ms=%s", restored, delay)
+        if before_paste is not None:
+            before_paste()
+        QTimer.singleShot(delay, self._send_paste_shortcut_with_retry)
 
-    def _send_paste_shortcut(self) -> None:
+    def _send_paste_shortcut_with_retry(self, attempt: int = 0) -> None:
+        if self._send_paste_shortcut():
+            return
+        if attempt < 1:
+            logger.info("[Paste] retry shortcut attempt=%s", attempt + 1)
+            QTimer.singleShot(
+                180,
+                lambda: self._send_paste_shortcut_with_retry(attempt + 1),
+            )
+
+    def _send_paste_shortcut(self) -> bool:
         modifier = Key.cmd if sys.platform == "darwin" else Key.ctrl
         try:
+            logger.info("[Paste] send shortcut modifier=%s", modifier)
             with self._keyboard.pressed(modifier):
                 self._keyboard.press("v")
                 self._keyboard.release("v")
+            return True
         except Exception:
             # Swallow errors to avoid breaking UI flow when OS-level permissions are missing.
-            return
+            logger.exception("[Paste] send shortcut failed")
+            return False
 
     def _paste_mixed_as_rich_html(
         self,
