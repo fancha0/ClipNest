@@ -414,6 +414,19 @@ class ClipRepositoryTests(unittest.TestCase):
         self.assertTrue(all(done <= total for done, total in calls))
         pkg_path.unlink(missing_ok=True)
 
+    def test_cancelled_export_preserves_existing_package(self) -> None:
+        repo = self._make_repo(self.db_path, max_items_per_tab=500)
+        tab_id = _tab_ids(repo)[0]
+        repo.upsert_text_item(tab_id, "cancel export")
+        pkg_path = self.db_path.with_suffix(".fluxpkg")
+        pkg_path.write_bytes(b"previous package")
+
+        with self.assertRaisesRegex(InterruptedError, "导出已取消"):
+            repo.export_tabs([tab_id], str(pkg_path), progress_callback=lambda *_: False)
+
+        self.assertEqual(pkg_path.read_bytes(), b"previous package")
+        self.assertEqual(list(pkg_path.parent.glob(f".{pkg_path.name}.*.tmp")), [])
+
     def test_export_stores_binaries_without_compression(self) -> None:
         repo = self._make_repo(self.db_path, max_items_per_tab=500)
         tab_id = _tab_ids(repo)[0]
@@ -682,7 +695,7 @@ class ClipRepositoryTests(unittest.TestCase):
         self.assertIsNotNone(second)
         self.assertEqual(first.id, second.id)
 
-    def test_raw_snapshot_within_one_second_keeps_single_item(self) -> None:
+    def test_raw_snapshot_within_one_second_dedupes_repeated_captures(self) -> None:
         repo = self._make_repo(self.db_path, max_items_per_tab=500)
         tab_id = _tab_ids(repo)[0]
         parts = [{"mime_type": "text/plain", "payload_blob": b"same"}]
@@ -759,7 +772,7 @@ class ClipRepositoryTests(unittest.TestCase):
         self.assertIsNotNone(third)
         assert first is not None and second is not None and third is not None
         self.assertEqual(first.id, second.id)
-        self.assertNotEqual(first.id, third.id)
+        self.assertNotEqual(second.id, third.id)
 
     def test_search_items_all_tabs_hits_multiple_tabs(self) -> None:
         repo = self._make_repo(self.db_path, max_items_per_tab=500)

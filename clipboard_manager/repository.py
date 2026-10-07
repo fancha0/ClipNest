@@ -5,6 +5,8 @@ import hashlib
 import html as html_lib
 import json
 import sqlite3
+import os
+import tempfile
 import zipfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -524,70 +526,76 @@ class ClipRepository:
         export_path.parent.mkdir(parents=True, exist_ok=True)
         if export_path.suffix.lower() != ".fluxpkg":
             export_path = export_path.with_suffix(".fluxpkg")
+        temp_fd, temp_name = tempfile.mkstemp(
+            prefix=f".{export_path.name}.", suffix=".tmp", dir=export_path.parent
+        )
+        os.close(temp_fd)
+        temporary_path = Path(temp_name)
 
-        conn = self._open_connection()
         try:
-            rows = conn.execute("SELECT * FROM tabs").fetchall()
-            tab_map = {int(row["id"]): row for row in rows}
-            if set(normalized_ids) - set(tab_map.keys()):
-                raise ValueError("导出标签列表包含不存在的标签。")
-
-            total_items = 0
-            for tab_id in normalized_ids:
-                count_row = conn.execute(
-                    "SELECT COUNT(*) AS c FROM items WHERE tab_id = ?", (tab_id,)
-                ).fetchone()
-                total_items += int(count_row["c"])
-
-            binary_refs: dict[str, str] = {}
-            manifest_tabs: list[dict[str, Any]] = []
-            exported_items = 0
-
-            with zipfile.ZipFile(export_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            conn = self._open_connection()
+            try:
+                rows = conn.execute("SELECT * FROM tabs").fetchall()
+                tab_map = {int(row["id"]): row for row in rows}
+                if set(normalized_ids) - set(tab_map.keys()):
+                    raise ValueError("导出标签列表包含不存在的标签。")
+                total_items = 0
                 for tab_id in normalized_ids:
-                    tab_row = tab_map[tab_id]
-                    item_rows = conn.execute(
-                        """
-                        SELECT *
-                        FROM items
-                        WHERE tab_id = ?
-                        ORDER BY created_at DESC, id DESC
-                        """,
-                        (tab_id,),
-                    ).fetchall()
-                    tab_payload: dict[str, Any] = {
-                        "package_tab_id": str(tab_id),
-                        "name": str(tab_row["name"]),
-                        "sort_order": int(tab_row["sort_order"]),
-                        "items": [],
-                    }
-                    for item_row in item_rows:
-                        item_payload = self._serialize_item_for_export(
-                            conn=conn,
-                            zf=zf,
-                            binary_refs=binary_refs,
-                            item_row=item_row,
-                        )
-                        tab_payload["items"].append(item_payload)
-                        exported_items += 1
-                        if progress_callback is not None:
-                            keep_going = progress_callback(exported_items, total_items)
-                            if keep_going is False:
-                                raise InterruptedError("导出已取消。")
-                    manifest_tabs.append(tab_payload)
+                    count_row = conn.execute(
+                        "SELECT COUNT(*) AS c FROM items WHERE tab_id = ?", (tab_id,)
+                    ).fetchone()
+                    total_items += int(count_row["c"])
+                binary_refs: dict[str, str] = {}
+                manifest_tabs: list[dict[str, Any]] = []
+                exported_items = 0
+                with zipfile.ZipFile(temporary_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                    for tab_id in normalized_ids:
+                        tab_row = tab_map[tab_id]
+                        item_rows = conn.execute(
+                            """
+                            SELECT *
+                            FROM items
+                            WHERE tab_id = ?
+                            ORDER BY created_at DESC, id DESC
+                            """,
+                            (tab_id,),
+                        ).fetchall()
+                        tab_payload: dict[str, Any] = {
+                            "package_tab_id": str(tab_id),
+                            "name": str(tab_row["name"]),
+                            "sort_order": int(tab_row["sort_order"]),
+                            "items": [],
+                        }
+                        for item_row in item_rows:
+                            item_payload = self._serialize_item_for_export(
+                                conn=conn,
+                                zf=zf,
+                                binary_refs=binary_refs,
+                                item_row=item_row,
+                            )
+                            tab_payload["items"].append(item_payload)
+                            exported_items += 1
+                            if progress_callback is not None:
+                                keep_going = progress_callback(exported_items, total_items)
+                                if keep_going is False:
+                                    raise InterruptedError("导出已取消。")
+                        manifest_tabs.append(tab_payload)
 
-                manifest = {
-                    "format": "clipnest-package",
-                    "version": self.PACKAGE_VERSION,
-                    "exported_at": self._now(),
-                    "tabs": manifest_tabs,
-                }
-                zf.writestr(
-                    "manifest.json",
-                    json.dumps(manifest, ensure_ascii=False, indent=2),
-                )
+                    manifest = {
+                        "format": "clipnest-package",
+                        "version": self.PACKAGE_VERSION,
+                        "exported_at": self._now(),
+                        "tabs": manifest_tabs,
+                    }
+                    zf.writestr(
+                        "manifest.json",
+                        json.dumps(manifest, ensure_ascii=False, indent=2),
+                    )
+            finally:
+                conn.close()
+            os.replace(temporary_path, export_path)
         finally:
-            conn.close()
+            temporary_path.unlink(missing_ok=True)
 
         return ExportResult(
             path=str(export_path),
@@ -933,7 +941,6 @@ class ClipRepository:
                 latest_ms = self._to_epoch_ms(latest_same_payload["created_at"])
                 if 0 <= captured_ms - latest_ms <= self.RAW_SNAPSHOT_DEDUPE_WINDOW_MS:
                     return self._to_item(latest_same_payload)
-
             sort_order = self._next_item_sort_order(conn, tab_id)
             cursor = conn.execute(
                 """
@@ -1015,7 +1022,6 @@ class ClipRepository:
                 latest_ms = self._to_epoch_ms(latest_same_payload["created_at"])
                 if 0 <= captured_ms - latest_ms <= self.RAW_SNAPSHOT_DEDUPE_WINDOW_MS:
                     return self._to_item(latest_same_payload)
-
             sort_order = self._next_item_sort_order(conn, tab_id)
             cursor = conn.execute(
                 """

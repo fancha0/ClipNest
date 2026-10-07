@@ -22,6 +22,7 @@ from .services.hotkey_service import HotkeyService
 from .services.paste_service import PasteService
 from .services.autostart_service import AutoStartService
 from .services.update_service import UpdateService, is_newer
+from .services.diagnostic_service import set_diagnostic_logging
 from .ui.main_window import MainWindow
 from .ui.dialog_base import load_dialog_sizes_from_setting, dump_dialog_sizes_to_setting
 from .ui.theme import (
@@ -92,6 +93,7 @@ class AppController:
         self._update_service = UpdateService()
         self._update_zip_path = ""
         self._auto_check_update = True
+        self._diagnostic_logging = True
         self._update_check_silent = False
         self._pending_focus_target: Optional[FocusTarget] = None
         self._auto_hide_on_paste = AUTO_HIDE_ON_PASTE
@@ -116,6 +118,10 @@ class AppController:
             self._repository.get_setting("auto_check_update") or "1"
         ) == "1"
         self._window.set_auto_check_update(self._auto_check_update)
+        self._diagnostic_logging = (
+            self._repository.get_setting("diagnostic_logging") or "1"
+        ) == "1"
+        set_diagnostic_logging(self._diagnostic_logging)
         if self._auto_check_update:
             QTimer.singleShot(3000, self._run_startup_update_check)
 
@@ -874,9 +880,6 @@ class AppController:
         if self._is_redundant_clipboard_capture(parsed):
             logger.info("[Capture] skip redundant special capture")
             return
-        if self._is_duplicate_rendered_capture(parsed):
-            logger.info("[Capture] skip duplicate rendered text/html capture")
-            return
         tab_id = self._capture_tab_id
         if tab_id is None:
             tabs = self._repository.list_tabs()
@@ -953,19 +956,6 @@ class AppController:
         if age > 3.0 or not last_hashes:
             return False
         return subset
-
-    def _is_duplicate_rendered_capture(self, parsed: ParsedClipboardItem) -> bool:
-        if parsed.item_type not in {"html", "text"}:
-            self._last_rendered_capture = None
-            return False
-        value = (parsed.plain_text or parsed.display_text or "").strip()
-        now = time.monotonic()
-        previous = getattr(self, "_last_rendered_capture", None)
-        self._last_rendered_capture = (now, value)
-        if not value or previous is None:
-            return False
-        previous_time, previous_value = previous
-        return now - previous_time <= 0.8 and previous_value == value
 
     def _on_hotkey_change_requested(self, raw_hotkey: str) -> None:
         normalized, error = HotkeyService.normalize_hotkey(raw_hotkey)
@@ -1084,6 +1074,17 @@ class AppController:
                 "启动时自动检查更新已开启" if auto_check else "启动时自动检查更新已关闭"
             )
 
+        diagnostic_logging = bool(payload.diagnostic_logging)
+        if diagnostic_logging != self._diagnostic_logging:
+            self._diagnostic_logging = diagnostic_logging
+            self._repository.set_setting(
+                "diagnostic_logging", "1" if diagnostic_logging else "0"
+            )
+            set_diagnostic_logging(diagnostic_logging)
+            messages.append(
+                "诊断日志已开启" if diagnostic_logging else "诊断日志已关闭"
+            )
+
         self._on_appearance_change_requested(payload.appearance)
 
         requested_mode = normalize_theme_mode(payload.theme_mode)
@@ -1143,8 +1144,10 @@ class AppController:
             "（如装有杀毒软件/安全管家，请将 ClipNest 加入信任区后重试）"
         )
 
-    def _on_update_download_requested(self, url: str, version: str) -> None:
-        self._update_service.download_async(url, version)
+    def _on_update_download_requested(
+        self, url: str, version: str, size: int, sha256: str
+    ) -> None:
+        self._update_service.download_async(url, version, size, sha256)
 
     def _on_update_download_succeeded(self, zip_path: str, version: str) -> None:
         self._update_zip_path = zip_path
@@ -1267,10 +1270,7 @@ class AppController:
         self._export_signals = None
         self._export_task = None
         self._window.close_export_progress()
-        export_path = getattr(self, "_export_path", None)
         if message == "导出已取消。":
-            if export_path:
-                Path(export_path).expanduser().unlink(missing_ok=True)
             self._window.show_info("导出已取消。")
             return
         self._window.show_error(f"导出失败：{message}")

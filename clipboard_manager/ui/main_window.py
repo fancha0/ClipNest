@@ -1175,7 +1175,7 @@ class MainWindow(QMainWindow):
     window_shown = Signal()
     settings_save_requested = Signal(object)
     check_update_requested = Signal()
-    update_download_requested = Signal(str, str)
+    update_download_requested = Signal(str, str, int, str)
     update_install_requested = Signal(str, str)
 
     def __init__(self) -> None:
@@ -1187,6 +1187,7 @@ class MainWindow(QMainWindow):
         self._active_settings_dialog: Optional[SettingsDialog] = None
         self._update_dialog: Optional[UpdateDialog] = None
         self._auto_check_update = True
+        self._diagnostic_logging = True
         self._capture_tab_text = "未设置"
         self._capture_tab_id: Optional[int] = None
         self._capture_tab_max: int = MAX_ITEMS_PER_TAB
@@ -1425,6 +1426,7 @@ class MainWindow(QMainWindow):
             pinned_color=self._pinned_accent_color,
             tabs=[(tab.id, tab.name) for tab in self._tabs_snapshot],
             auto_check_update=self._auto_check_update,
+            diagnostic_logging=self._diagnostic_logging,
         )
         self._active_settings_dialog = dialog
         dialog.apply_requested.connect(self._on_settings_apply_requested)
