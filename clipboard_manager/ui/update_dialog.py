@@ -18,7 +18,7 @@ class UpdateDialog(ResizableDialog):
     _default_size = (520, 420)
     _min_size = (440, 360)
 
-    download_requested = Signal(str, str)
+    download_requested = Signal(str, str, int, str)
     install_requested = Signal(str, str)
 
     def __init__(self, parent, info: dict, frozen: bool) -> None:
@@ -82,7 +82,12 @@ class UpdateDialog(ResizableDialog):
         self._action_btn.setEnabled(False)
         self._action_btn.setText("正在下载...")
         self._progress.setVisible(True)
-        self.download_requested.emit(url, version)
+        self.download_requested.emit(
+            url,
+            version,
+            int(self._info.get("size") or 0),
+            str(self._info.get("sha256") or ""),
+        )
 
     def set_progress(self, received: int, total: int) -> None:
         if total > 0:

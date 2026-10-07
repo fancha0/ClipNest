@@ -19,7 +19,6 @@ _pyside6_runtime_dlls = [
     )
     if (_pyside6_dir / name).exists()
 ]
-
 a = Analysis(
     ['main.py'],
     pathex=[],

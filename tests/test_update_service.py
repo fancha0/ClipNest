@@ -8,6 +8,7 @@ from clipboard_manager.services.update_service import (
     build_updater_bat,
     is_newer,
     parse_version,
+    validate_update_archive,
 )
 
 
@@ -53,6 +54,7 @@ class ManifestParseTests(unittest.TestCase):
                 "notes": "修复了一些问题",
                 "url": "https://example.com/clipnest/ClipNest-Windows.zip",
                 "size": 12345,
+                "sha256": "a" * 64,
             }
         )
         self.assertIsNotNone(info)
@@ -60,11 +62,19 @@ class ManifestParseTests(unittest.TestCase):
         self.assertEqual(info["tag"], "v0.2.0")
         self.assertEqual(info["body"], "修复了一些问题")
         self.assertEqual(info["size"], 12345)
+        self.assertEqual(info["sha256"], "a" * 64)
 
     def test_manifest_requires_version_and_url(self) -> None:
         self.assertIsNone(_parse_manifest({"version": "0.2.0"}))
         self.assertIsNone(_parse_manifest({"url": "https://x/y.zip"}))
         self.assertIsNone(_parse_manifest({}))
+
+    def test_manifest_requires_sha256(self) -> None:
+        self.assertIsNone(
+            _parse_manifest(
+                {"version": "0.2.0", "url": "https://x/y.zip", "sha256": "bad"}
+            )
+        )
 
 
 class UpdaterBatTests(unittest.TestCase):
@@ -76,6 +86,40 @@ class UpdaterBatTests(unittest.TestCase):
         self.assertIn("/R:2", bat)
         self.assertIn('start "" "C:\\apps\\ClipNest\\ClipNest.exe"', bat)
         self.assertIn('del "%~f0"', bat)
+
+
+class UpdateArchiveValidationTests(unittest.TestCase):
+    def test_requires_application_executable(self) -> None:
+        import tempfile
+        import zipfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = f"{directory}/package.zip"
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr("readme.txt", "not an app")
+            self.assertIn("缺少 ClipNest.exe", validate_update_archive(path))
+
+    def test_rejects_path_traversal(self) -> None:
+        import tempfile
+        import zipfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = f"{directory}/package.zip"
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr("ClipNest.exe", "binary")
+                archive.writestr("../outside.txt", "bad")
+            self.assertIn("不安全", validate_update_archive(path))
+
+    def test_accepts_valid_update_archive(self) -> None:
+        import tempfile
+        import zipfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = f"{directory}/package.zip"
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr("ClipNest.exe", "binary")
+                archive.writestr("_internal/library.dll", "library")
+            self.assertIsNone(validate_update_archive(path))
 
 
 class HttpJsonTests(unittest.TestCase):

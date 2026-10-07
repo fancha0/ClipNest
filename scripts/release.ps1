@@ -40,6 +40,7 @@ try {
     if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
     Compress-Archive -Path (Join-Path $root "dist\ClipNest\*") -DestinationPath $zipPath -Force
     $zipMb = [math]::Round((Get-Item $zipPath).Length / 1MB, 1)
+    $zipSha256 = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
     Write-Output "    更新包：$zipPath ($zipMb MB)"
 
     $setupPath = Join-Path $root "dist\ClipNest-Setup.exe"
@@ -74,6 +75,7 @@ try {
             notes   = $releaseBody
             url     = "$PublicBaseUrl/ClipNest-Windows.zip"
             size    = (Get-Item $zipPath).Length
+            sha256  = $zipSha256
         } | ConvertTo-Json
         [System.IO.File]::WriteAllText($manifestPath, $manifest, (New-Object System.Text.UTF8Encoding($false)))
 

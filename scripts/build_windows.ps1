@@ -114,9 +114,7 @@ sys.exit(0)
     else {
         Write-Output "Using default app icon."
     }
-    $pyInstallerArgs += "main.py"
-
-    & $pythonPath -m PyInstaller @pyInstallerArgs
+    & $pythonPath -m PyInstaller --noconfirm --clean (Join-Path $root "ClipNest.spec")
 
     if ($LASTEXITCODE -ne 0) {
         throw "PyInstaller build failed."

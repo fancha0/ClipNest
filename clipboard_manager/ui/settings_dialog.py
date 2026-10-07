@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Optional
 
-from PySide6.QtCore import QPointF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QIcon, QKeySequence, QPainter, QPen, QPixmap
+from PySide6.QtCore import QPointF, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QColor, QDesktopServices, QIcon, QKeySequence, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QColorDialog,
     QComboBox,
@@ -31,6 +31,7 @@ from .theme import (
 from .dialog_base import ResizableDialog
 from .settings_widgets import ColorPickButton, SettingRow, SettingsSection, ToggleSwitch
 from ..version import APP_VERSION
+from ..config import log_file_path
 
 PRESET_COLORS = {
     "石墨夜": ("#1f2530", "#28303f", "#2e6da4"),
@@ -125,6 +126,7 @@ class SettingsPayload:
     pinned_color: str
     apply_only: bool = False
     auto_check_update: bool = True
+    diagnostic_logging: bool = True
 
 
 class SettingsDialog(ResizableDialog):
@@ -150,6 +152,7 @@ class SettingsDialog(ResizableDialog):
         pinned_color: str,
         tabs: list[tuple[int, str]],
         auto_check_update: bool = True,
+        diagnostic_logging: bool = True,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("设置")
@@ -165,6 +168,7 @@ class SettingsDialog(ResizableDialog):
         self._note_font_size_initial = note_font_size
         self._theme_mode_initial = normalize_theme_mode(theme_mode)
         self._auto_check_update_initial = bool(auto_check_update)
+        self._diagnostic_logging_initial = bool(diagnostic_logging)
         self._export_requested = False
         self._import_requested = False
 
@@ -500,6 +504,19 @@ class SettingsDialog(ResizableDialog):
         self.auto_update_chk = ToggleSwitch(page)
         self.auto_update_chk.setChecked(self._auto_check_update_initial)
 
+        self.diagnostic_logging_chk = ToggleSwitch(page)
+        self.diagnostic_logging_chk.setChecked(self._diagnostic_logging_initial)
+        self.open_log_btn = QPushButton("打开日志", page)
+        self.open_log_btn.clicked.connect(self._open_log_file)
+        self.clear_log_btn = QPushButton("清空日志", page)
+        self.clear_log_btn.clicked.connect(self._clear_log_file)
+        log_actions = QWidget(page)
+        log_actions_layout = QHBoxLayout(log_actions)
+        log_actions_layout.setContentsMargins(0, 0, 0, 0)
+        log_actions_layout.setSpacing(6)
+        log_actions_layout.addWidget(self.open_log_btn)
+        log_actions_layout.addWidget(self.clear_log_btn)
+
         section = SettingsSection("软件更新", page)
         section.add_row(
             SettingRow(
@@ -515,9 +532,36 @@ class SettingsDialog(ResizableDialog):
                 "启动后自动静默检查，发现新版本时弹出更新窗口。",
             )
         )
+        section.add_row(
+            SettingRow(
+                "诊断日志",
+                self.diagnostic_logging_chk,
+                "遇到问题时开启；日志位于当前用户数据目录。",
+            )
+        )
+        section.add_row(
+            SettingRow(
+                "日志操作",
+                log_actions,
+                str(log_file_path()),
+            )
+        )
         layout.addWidget(section)
         layout.addStretch(1)
         return page
+
+    def _open_log_file(self) -> None:
+        path = log_file_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch(exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def _clear_log_file(self) -> None:
+        try:
+            log_file_path().write_text("", encoding="utf-8")
+            self.set_apply_feedback("诊断日志已清空")
+        except OSError as exc:
+            self.set_apply_feedback(f"清空日志失败：{exc}")
 
     def set_latest_version(self, version: str, newer: bool) -> None:
         suffix = "发现新版本" if newer else "已是最新"
@@ -634,4 +678,5 @@ class SettingsDialog(ResizableDialog):
             note_font_size=int(self.note_font_spin.value()),
             pinned_color=self._pinned_color,
             auto_check_update=bool(self.auto_update_chk.isChecked()),
+            diagnostic_logging=bool(self.diagnostic_logging_chk.isChecked()),
         )

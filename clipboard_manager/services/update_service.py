@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
 import re
+import shutil
 import ssl
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 import zipfile
 from typing import Optional
@@ -53,10 +56,27 @@ def _build_ssl_context() -> ssl.SSLContext:
             logger.exception("[Update] loading Windows certificate store failed")
     return context
 
+
+def cleanup_update_temp_dirs(max_age_seconds: int = 7 * 24 * 3600) -> None:
+    """Remove stale update download/extract directories left by interrupted updates."""
+    now = time.time()
+    temp_root = tempfile.gettempdir()
+    for entry in os.scandir(temp_root):
+        if not entry.is_dir() or not entry.name.startswith("clipnest-"):
+            continue
+        try:
+            if now - entry.stat().st_mtime > max_age_seconds:
+                shutil.rmtree(entry.path, ignore_errors=True)
+        except OSError:
+            continue
+
 _REPO = "fancha0/ClipNest"
 _API_URL = f"https://api.github.com/repos/{_REPO}/releases/latest"
 _ASSET_NAME = "ClipNest-Windows.zip"
 _REQUEST_TIMEOUT = 15
+_MAX_UPDATE_SIZE = 1024 * 1024 * 1024
+_MAX_UPDATE_ENTRIES = 100_000
+_MAX_UNPACKED_SIZE = 2 * 1024 * 1024 * 1024
 
 # Own-server update manifest, e.g. "https://clipnest.example.com/clipnest/latest.json".
 # When set, it is checked first; the GitHub release is only a fallback for
@@ -96,7 +116,8 @@ def _parse_manifest(payload: dict) -> Optional[dict]:
     """Parse an own-server manifest: {version, notes, url, size}."""
     version = str(payload.get("version") or "").strip().lstrip("vV")
     url = str(payload.get("url") or "").strip()
-    if not version or not url:
+    sha256 = str(payload.get("sha256") or "").strip().lower()
+    if not version or not url or not re.fullmatch(r"[0-9a-f]{64}", sha256):
         return None
     try:
         size = int(payload.get("size") or 0)
@@ -108,6 +129,7 @@ def _parse_manifest(payload: dict) -> Optional[dict]:
         "body": str(payload.get("notes") or payload.get("body") or ""),
         "url": url,
         "size": size,
+        "sha256": sha256,
     }
 
 
@@ -134,6 +156,38 @@ def build_updater_bat(source_dir: str, install_dir: str, exe_name: str) -> str:
         f'start "" "{install_dir}\\{exe_name}"\r\n'
         '(goto) 2>nul & del "%~f0"\r\n'
     )
+
+
+def validate_update_archive(zip_path: str) -> str | None:
+    if not zipfile.is_zipfile(zip_path):
+        return "更新包已损坏，请重新下载。"
+    try:
+        with zipfile.ZipFile(zip_path) as archive:
+            infos = archive.infolist()
+            if len(infos) > _MAX_UPDATE_ENTRIES:
+                return "更新包文件数量异常。"
+            total_size = 0
+            names: set[str] = set()
+            has_executable = False
+            for info in infos:
+                normalized = info.filename.replace("\\", "/")
+                if (normalized.startswith("/") or ".." in normalized.split("/")
+                        or re.match(r"^[A-Za-z]:", normalized)
+                        or normalized in names):
+                    return "更新包包含不安全或重复的文件路径。"
+                names.add(normalized)
+                total_size += info.file_size
+                if total_size > _MAX_UNPACKED_SIZE:
+                    return "更新包解压体积超过限制。"
+                if normalized == "ClipNest.exe":
+                    has_executable = True
+            if not has_executable:
+                return "更新包缺少 ClipNest.exe。"
+            if archive.testzip() is not None:
+                return "更新包内容校验失败，请重新下载。"
+    except (OSError, zipfile.BadZipFile, RuntimeError, zipfile.LargeZipFile) as exc:
+        return f"更新包结构无效：{exc}"
+    return None
 
 
 class _CheckSignals(QObject):
@@ -180,7 +234,11 @@ class _CheckTask(QRunnable):
             "body": str(release.get("body") or ""),
             "url": str(asset.get("browser_download_url") or ""),
             "size": int(asset.get("size") or 0),
+            "sha256": str(asset.get("digest") or "").removeprefix("sha256:").lower(),
         }
+        if not re.fullmatch(r"[0-9a-f]{64}", info["sha256"]):
+            self._signals.failed.emit("GitHub 发布信息缺少有效的 SHA-256 摘要")
+            return
         logger.info("[Update] latest release = %s", info["tag"])
         self._signals.finished.emit(info)
 
@@ -192,16 +250,21 @@ class _DownloadSignals(QObject):
 
 
 class _DownloadTask(QRunnable):
-    def __init__(self, signals: _DownloadSignals, url: str, version: str) -> None:
+    def __init__(self, signals: _DownloadSignals, url: str, version: str,
+                 expected_size: int = 0, expected_sha256: str = "") -> None:
         super().__init__()
         self._signals = signals
         self._url = url
         self._version = version
+        self._expected_size = int(expected_size or 0)
+        self._expected_sha256 = str(expected_sha256 or "").lower()
 
     def run(self) -> None:
         temp_dir = tempfile.mkdtemp(prefix="clipnest-download-")
-        zip_path = f"{temp_dir}\\ClipNest-{_ASSET_NAME}"
+        zip_path = os.path.join(temp_dir, f"ClipNest-{_ASSET_NAME}")
         try:
+            if not re.fullmatch(r"[0-9a-f]{64}", self._expected_sha256):
+                raise ValueError("发布信息缺少有效的 SHA-256 摘要。")
             request = urllib.request.Request(
                 self._url, headers={"User-Agent": "ClipNest"}
             )
@@ -209,18 +272,31 @@ class _DownloadTask(QRunnable):
                 request, timeout=_REQUEST_TIMEOUT, context=_build_ssl_context()
             ) as response:
                 total = int(response.headers.get("Content-Length") or 0)
+                if total > _MAX_UPDATE_SIZE or (
+                    self._expected_size and total and total != self._expected_size
+                ):
+                    raise ValueError("更新包大小与发布信息不符。")
                 received = 0
+                digest = hashlib.sha256()
                 with open(zip_path, "wb") as output:
                     while True:
                         chunk = response.read(64 * 1024)
                         if not chunk:
                             break
-                        output.write(chunk)
                         received += len(chunk)
+                        if received > _MAX_UPDATE_SIZE:
+                            raise ValueError("更新包超过允许的最大大小。")
+                        output.write(chunk)
+                        digest.update(chunk)
                         self._signals.progress.emit(received, total)
+            if self._expected_size and received != self._expected_size:
+                raise ValueError("更新包下载不完整。")
+            if self._expected_sha256 and digest.hexdigest() != self._expected_sha256:
+                raise ValueError("更新包 SHA-256 校验失败。")
             logger.info("[Update] downloaded %s -> %s", self._version, zip_path)
             self._signals.finished.emit(zip_path, self._version)
         except Exception as exc:
+            shutil.rmtree(temp_dir, ignore_errors=True)
             logger.exception("[Update] download failed")
             self._signals.failed.emit(str(exc))
 
@@ -234,6 +310,7 @@ class UpdateService(QObject):
 
     def __init__(self, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
+        cleanup_update_temp_dirs()
         self._check_signals = _CheckSignals()
         self._check_signals.finished.connect(self.check_succeeded)
         self._check_signals.failed.connect(self.check_failed)
@@ -245,9 +322,12 @@ class UpdateService(QObject):
     def check_async(self) -> None:
         QThreadPool.globalInstance().start(_CheckTask(self._check_signals))
 
-    def download_async(self, url: str, version: str) -> None:
+    def download_async(self, url: str, version: str, expected_size: int = 0,
+                       expected_sha256: str = "") -> None:
         QThreadPool.globalInstance().start(
-            _DownloadTask(self._download_signals, url, version)
+            _DownloadTask(
+                self._download_signals, url, version, expected_size, expected_sha256
+            )
         )
 
     def apply_update(self, zip_path: str) -> tuple[bool, str]:
@@ -256,8 +336,9 @@ class UpdateService(QObject):
 
         if not is_frozen():
             return False, "开发模式下无法自动安装更新。"
-        if not zipfile.is_zipfile(zip_path):
-            return False, "更新包已损坏，请重新下载。"
+        validation_error = validate_update_archive(zip_path)
+        if validation_error:
+            return False, validation_error
 
         install_dir = QApplication.applicationDirPath()
         extract_dir = tempfile.mkdtemp(prefix="clipnest-update-")
