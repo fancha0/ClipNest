@@ -790,6 +790,10 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
         QLabel#aboutLatestVersion {{
             color: {tokens.text_secondary};
         }}
+        QLabel#dialogErrorLabel {{
+            color: #c2413d;
+            min-height: 18px;
+        }}
         QPushButton#colorPickButton {{
             text-align: left;
             padding: 5px 12px 5px 8px;

@@ -835,8 +835,8 @@ class MixedContentEdit(ImageMimeMixin, QTextEdit):
 
 class BundleItemDialog(ResizableDialog):
     _size_key = "bundle_item"
-    _default_size = (640, 560)
-    _min_size = (460, 420)
+    _default_size = (760, 620)
+    _min_size = (520, 460)
 
     def __init__(
         self,
@@ -860,10 +860,41 @@ class BundleItemDialog(ResizableDialog):
 
     def _build_ui(self, initial_text: str) -> None:
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(10)
+
+        header = QLabel("输入文字、粘贴图片，或直接把图片拖到编辑区", self)
+        header.setObjectName("settingRowDescription")
+        layout.addWidget(header)
+
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(6)
+        paste_btn = QPushButton("粘贴内容", self)
+        paste_btn.setToolTip("从系统剪贴板插入文字或图片（Ctrl+V）")
+        paste_btn.clicked.connect(self.content_edit_paste)
+        undo_btn = QPushButton("撤销", self)
+        redo_btn = QPushButton("重做", self)
+        undo_btn.clicked.connect(lambda: self.content_edit.undo())
+        redo_btn.clicked.connect(lambda: self.content_edit.redo())
+        toolbar.addWidget(paste_btn)
+        toolbar.addWidget(undo_btn)
+        toolbar.addWidget(redo_btn)
+        toolbar.addStretch(1)
+        layout.addLayout(toolbar)
+
         self.content_edit = MixedContentEdit(self)
         self.content_edit.setMinimumHeight(280)
         self.content_edit.set_initial_content(initial_text, self._images)
+        self.content_edit.textChanged.connect(self._update_content_stats)
         layout.addWidget(self.content_edit, 1)
+
+        self.content_stats_label = QLabel("0 个字符 · 0 张图片", self)
+        self.content_stats_label.setObjectName("settingRowDescription")
+        layout.addWidget(self.content_stats_label)
+        self.validation_label = QLabel("", self)
+        self.validation_label.setObjectName("dialogErrorLabel")
+        layout.addWidget(self.validation_label)
+        self._update_content_stats()
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
@@ -879,6 +910,16 @@ class BundleItemDialog(ResizableDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
+    def content_edit_paste(self) -> None:
+        self.content_edit.paste()
+
+    def _update_content_stats(self) -> None:
+        if not hasattr(self, "content_edit"):
+            return
+        text = self.content_edit.toPlainText()
+        image_count = sum(1 for segment in self.content_edit.segments() if segment.get("type") == "image")
+        self.content_stats_label.setText(f"{len(text)} 个字符 · {image_count} 张图片")
+
     def _refresh_image_list(self) -> None:
         # Reserved for compatibility; content now renders directly inside mixed editor.
         return
@@ -889,11 +930,12 @@ class BundleItemDialog(ResizableDialog):
         text = self._result_text
         has_images = len(self._result_images) > 0
         if not has_images and text == "":
-            QMessageBox.warning(self, "提示", "请至少输入文字或添加一张图片。")
+            self.validation_label.setText("请至少输入文字或添加一张图片。")
             return
         if self._require_image and not has_images:
-            QMessageBox.warning(self, "提示", "该条目至少保留一张图片。")
+            self.validation_label.setText("该条目至少保留一张图片。")
             return
+        self.validation_label.clear()
         self.accept()
 
     def result_text(self) -> str:
