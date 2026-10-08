@@ -28,6 +28,7 @@ from PySide6.QtGui import (
     QCloseEvent,
     QColor,
     QDrag,
+    QFont,
     QIcon,
     QImage,
     QKeySequence,
@@ -2607,9 +2608,13 @@ class MainWindow(QMainWindow):
     def _apply_theme(self) -> None:
         app_stylesheet = build_app_stylesheet(self._theme_tokens)
         app = QApplication.instance()
+        base_font = QFont(self.font())
+        base_font.setPointSize(max(10, int(self._theme_tokens.base_font_size)))
         if app is not None:
+            app.setFont(base_font)
             app.setStyleSheet(app_stylesheet)
         else:
+            self.setFont(base_font)
             self.setStyleSheet(app_stylesheet)
         self.settings_menu.setStyleSheet(self._menu_stylesheet())
         self.add_item_btn.setIcon(
@@ -2617,6 +2622,7 @@ class MainWindow(QMainWindow):
         )
         if self._tray_menu is not None:
             self._tray_menu.setStyleSheet(self._menu_stylesheet())
+
 
     def _apply_light_theme(self) -> None:
         # Backward-compatible alias.

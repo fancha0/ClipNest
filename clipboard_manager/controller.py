@@ -29,7 +29,10 @@ from .ui.theme import (
     AppearanceSettings,
     default_appearance_settings,
     effective_appearance,
+    normalize_accent_color,
+    normalize_glass_strength,
     normalize_theme_mode,
+    normalize_theme_style,
     normalize_hex_color,
     resolve_dark_mode,
 )
@@ -317,6 +320,9 @@ class AppController:
                 "appearance_item_antialias",
                 defaults.item_antialias,
             ),
+            theme_style=normalize_theme_style(self._repository.get_setting("appearance_theme_style")),
+            glass_strength=normalize_glass_strength(self._repository.get_setting("appearance_glass_strength")),
+            accent_color=normalize_accent_color(self._repository.get_setting("appearance_accent_color")),
         )
 
     def _save_appearance_settings(self, appearance: AppearanceSettings) -> None:
@@ -326,6 +332,9 @@ class AppController:
         self._repository.set_setting("appearance_item_selected_bg", appearance.item_selected_bg)
         self._repository.set_setting("appearance_show_scrollbar", "1" if appearance.show_scrollbar else "0")
         self._repository.set_setting("appearance_item_antialias", "1" if appearance.item_antialias else "0")
+        self._repository.set_setting("appearance_theme_style", appearance.theme_style)
+        self._repository.set_setting("appearance_glass_strength", appearance.glass_strength)
+        self._repository.set_setting("appearance_accent_color", appearance.accent_color)
 
     def _system_dark(self) -> bool:
         try:
@@ -417,6 +426,9 @@ class AppController:
             ),
             show_scrollbar=bool(appearance.show_scrollbar),
             item_antialias=bool(appearance.item_antialias),
+            theme_style=normalize_theme_style(appearance.theme_style),
+            glass_strength=normalize_glass_strength(appearance.glass_strength),
+            accent_color=normalize_accent_color(appearance.accent_color),
         )
         try:
             self._window.set_appearance(normalized)

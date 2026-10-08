@@ -257,7 +257,14 @@ class ClipItemDelegate(QStyledItemDelegate):
             fill = self._blend(base_fill, self._pinned_color, self._PINNED_TINT_RATIO)
         elif hovered:
             fill = base_fill.lighter(112) if dark else QColor(253, 254, 255)
-        fill.setAlpha(174 if selected else 158 if hovered else 142)
+        glass = str(getattr(self._tokens, "glass_strength", "glass"))
+        if glass == "standard":
+            alpha = 186 if selected else 174 if hovered else 160
+        elif glass == "glass":
+            alpha = 158 if selected else 135 if hovered else 112
+        else:
+            alpha = 132 if selected else 110 if hovered else 88
+        fill.setAlpha(alpha)
         painter.setBrush(fill)
 
         border = self._parse_token_color(

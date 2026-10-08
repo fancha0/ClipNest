@@ -24,6 +24,9 @@ from PySide6.QtWidgets import (
 
 from .theme import (
     AppearanceSettings,
+    ACCENT_COLOR_LABELS,
+    GLASS_STRENGTH_LABELS,
+    THEME_STYLE_LABELS,
     current_theme_tokens,
     default_appearance_settings,
     normalize_theme_mode,
@@ -34,9 +37,11 @@ from ..version import APP_VERSION
 from ..config import log_file_path
 
 PRESET_COLORS = {
-    "石墨夜": ("#1f2530", "#28303f", "#2e6da4"),
+    "简约白": ("#f6f9ff", "#ffffff", "#8fc1f3"),
     "护眼豆沙": ("#e9f1ea", "#ffffff", "#a9cdb4"),
     "商务蓝灰": ("#e8edf5", "#ffffff", "#b7d0f0"),
+    "冰川蓝": ("#edf7ff", "#ffffff", "#a8d8f0"),
+    "雾松绿": ("#eef6f1", "#ffffff", "#b9d8c8"),
 }
 
 THEME_MODE_LABELS = {
@@ -44,6 +49,7 @@ THEME_MODE_LABELS = {
     "light": "浅色",
     "dark": "深色",
 }
+
 
 
 def _to_qt_hotkey_text(hotkey_text: str) -> str:
@@ -359,6 +365,54 @@ class SettingsDialog(ResizableDialog):
         )
         layout.addWidget(theme_section)
 
+        self.theme_style_combo = QComboBox(page)
+        self.theme_style_combo.setFixedWidth(150)
+        for style_key, style_label in THEME_STYLE_LABELS.items():
+            self.theme_style_combo.addItem(style_label, style_key)
+        style_index = self.theme_style_combo.findData(self._appearance.theme_style)
+        if style_index >= 0:
+            self.theme_style_combo.setCurrentIndex(style_index)
+
+        self.glass_strength_combo = QComboBox(page)
+        self.glass_strength_combo.setFixedWidth(150)
+        for strength_key, strength_label in GLASS_STRENGTH_LABELS.items():
+            self.glass_strength_combo.addItem(strength_label, strength_key)
+        strength_index = self.glass_strength_combo.findData(self._appearance.glass_strength)
+        if strength_index >= 0:
+            self.glass_strength_combo.setCurrentIndex(strength_index)
+
+        self.accent_color_combo = QComboBox(page)
+        self.accent_color_combo.setFixedWidth(150)
+        for accent_key, accent_label in ACCENT_COLOR_LABELS.items():
+            self.accent_color_combo.addItem(accent_label, accent_key)
+        accent_index = self.accent_color_combo.findData(self._appearance.accent_color)
+        if accent_index >= 0:
+            self.accent_color_combo.setCurrentIndex(accent_index)
+
+        theme_style_section = SettingsSection("主题风格", page)
+        theme_style_section.add_row(
+            SettingRow(
+                "风格",
+                self.theme_style_combo,
+                "选择整体配色风格；深色模式下会切换到石墨夜玻璃配色。",
+            )
+        )
+        theme_style_section.add_row(
+            SettingRow(
+                "玻璃强度",
+                self.glass_strength_combo,
+                "影响导航、条目和搜索框的透明程度。",
+            )
+        )
+        theme_style_section.add_row(
+            SettingRow(
+                "强调色",
+                self.accent_color_combo,
+                "影响按钮、选中态、导航竖条和焦点颜色。",
+            )
+        )
+        layout.addWidget(theme_style_section)
+
         self.font_size_spin = QSpinBox(page)
         self.font_size_spin.setRange(10, 28)
         self.font_size_spin.setFixedWidth(120)
@@ -638,6 +692,9 @@ class SettingsDialog(ResizableDialog):
         self.window_bg_btn.set_color(self._appearance.window_bg)
         self.item_bg_btn.set_color(self._appearance.item_bg)
         self.item_selected_bg_btn.set_color(self._appearance.item_selected_bg)
+        self.theme_style_combo.setCurrentIndex(self.theme_style_combo.findData(self._appearance.theme_style))
+        self.glass_strength_combo.setCurrentIndex(self.glass_strength_combo.findData(self._appearance.glass_strength))
+        self.accent_color_combo.setCurrentIndex(self.accent_color_combo.findData(self._appearance.accent_color))
 
     # ---------- results ----------
 
@@ -681,7 +738,13 @@ class SettingsDialog(ResizableDialog):
             capture_tab_id=int(capture_tab_data) if capture_tab_data is not None else None,
             capture_tab_max=int(self.capture_max_spin.value()),
             autostart=bool(self.autostart_chk.isChecked()),
-            appearance=self._appearance,
+            appearance=replace(
+                self._appearance,
+                font_size=int(self.font_size_spin.value()),
+                theme_style=str(self.theme_style_combo.currentData() or self._appearance.theme_style),
+                glass_strength=str(self.glass_strength_combo.currentData() or self._appearance.glass_strength),
+                accent_color=str(self.accent_color_combo.currentData() or self._appearance.accent_color),
+            ),
             theme_mode=normalize_theme_mode(
                 str(self.theme_mode_combo.currentData() or "follow_system")
             ),

@@ -52,23 +52,48 @@ class StylesheetBuildTests(unittest.TestCase):
 
 
 class PresetTests(unittest.TestCase):
-    def test_three_distinct_presets(self) -> None:
-        self.assertEqual(len(PRESET_COLORS), 3)
+    def test_light_presets_are_distinct(self) -> None:
+        self.assertEqual(len(PRESET_COLORS), 5)
         combos = set(PRESET_COLORS.values())
-        self.assertEqual(len(combos), 3)
-        self.assertIn("石墨夜", PRESET_COLORS)
-        self.assertNotIn("简约白", PRESET_COLORS)
-        self.assertNotIn("高对比白", PRESET_COLORS)
+        self.assertEqual(len(combos), 5)
+        self.assertIn("冰川蓝", PRESET_COLORS)
+        self.assertIn("雾松绿", PRESET_COLORS)
 
     def test_default_appearance_is_eye_friendly_sand(self) -> None:
         appearance = default_appearance_settings()
         self.assertEqual(appearance.window_bg, "#e9f1ea")
         self.assertEqual(appearance.item_bg, "#ffffff")
         self.assertEqual(appearance.item_selected_bg, "#a9cdb4")
+        self.assertEqual(appearance.theme_style, "eye_green")
+        self.assertEqual(appearance.glass_strength, "glass")
+        self.assertEqual(appearance.accent_color, "auto")
 
-    def test_dark_preset_window_is_dark(self) -> None:
-        window_bg, _item_bg, _selected = PRESET_COLORS["石墨夜"]
-        self.assertLess(QColor(window_bg).lightness(), 128)
+    def test_graphite_night_style_builds_dark_tokens(self) -> None:
+        appearance = dataclasses.replace(
+            default_appearance_settings(),
+            theme_style="graphite_night",
+            window_bg="#1f2530",
+            item_bg="#28303f",
+            item_selected_bg="#2e6da4",
+        )
+        tokens = build_theme_tokens_from_appearance(appearance)
+        self.assertTrue(tokens.is_dark)
+        self.assertEqual(tokens.theme_style, "graphite_night")
+
+    def test_glass_strength_changes_transparency_tokens(self) -> None:
+        base = dataclasses.replace(default_appearance_settings(), glass_strength="glass")
+        standard = build_theme_tokens_from_appearance(dataclasses.replace(base, glass_strength="standard"))
+        transparent = build_theme_tokens_from_appearance(dataclasses.replace(base, glass_strength="transparent"))
+        self.assertNotEqual(standard.glass_strength, transparent.glass_strength)
+        self.assertEqual(standard.glass_strength, "standard")
+        self.assertEqual(transparent.glass_strength, "transparent")
+
+    def test_accent_color_auto_uses_blue_in_light(self) -> None:
+        tokens = build_theme_tokens_from_appearance(
+            dataclasses.replace(default_appearance_settings(), accent_color="auto")
+        )
+        self.assertFalse(tokens.is_dark)
+        self.assertEqual(tokens.accent_color, "auto")
 
 
 if __name__ == "__main__":

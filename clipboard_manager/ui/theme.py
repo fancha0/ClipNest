@@ -6,12 +6,70 @@ from typing import Literal
 ThemeMode = Literal["follow_system", "light", "dark"]
 THEME_MODES: tuple[str, ...] = ("follow_system", "light", "dark")
 
+ThemeStyle = Literal["simple_white", "eye_green", "business_blue", "graphite_night", "glacier_blue", "misty_green"]
+THEME_STYLES: tuple[str, ...] = (
+    "simple_white",
+    "eye_green",
+    "business_blue",
+    "graphite_night",
+    "glacier_blue",
+    "misty_green",
+)
+THEME_STYLE_LABELS = {
+    "simple_white": "简约白",
+    "eye_green": "护眼豆沙",
+    "business_blue": "商务蓝灰",
+    "graphite_night": "石墨夜",
+    "glacier_blue": "冰川蓝",
+    "misty_green": "雾松绿",
+}
+
+GlassStrength = Literal["standard", "glass", "transparent"]
+GLASS_STRENGTHS: tuple[str, ...] = ("standard", "glass", "transparent")
+GLASS_STRENGTH_LABELS = {
+    "standard": "标准",
+    "glass": "玻璃",
+    "transparent": "通透",
+}
+
+AccentColor = Literal["auto", "blue", "cyan", "green", "orange", "purple"]
+ACCENT_COLORS: tuple[str, ...] = ("auto", "blue", "cyan", "green", "orange", "purple")
+ACCENT_COLOR_LABELS = {
+    "auto": "自动",
+    "blue": "蓝",
+    "cyan": "青",
+    "green": "绿",
+    "orange": "橙",
+    "purple": "紫",
+}
+
 
 def normalize_theme_mode(value: str | None) -> ThemeMode:
     text = (value or "").strip().lower()
     if text in THEME_MODES:
         return text  # type: ignore[return-value]
     return "follow_system"
+
+
+def normalize_theme_style(value: str | None) -> ThemeStyle:
+    text = (value or "").strip().lower()
+    if text in THEME_STYLES:
+        return text  # type: ignore[return-value]
+    return "eye_green"
+
+
+def normalize_glass_strength(value: str | None) -> GlassStrength:
+    text = (value or "").strip().lower()
+    if text in GLASS_STRENGTHS:
+        return text  # type: ignore[return-value]
+    return "glass"
+
+
+def normalize_accent_color(value: str | None) -> AccentColor:
+    text = (value or "").strip().lower()
+    if text in ACCENT_COLORS:
+        return text  # type: ignore[return-value]
+    return "auto"
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,6 +80,9 @@ class AppearanceSettings:
     item_selected_bg: str
     show_scrollbar: bool
     item_antialias: bool
+    theme_style: ThemeStyle = "eye_green"
+    glass_strength: GlassStrength = "glass"
+    accent_color: AccentColor = "auto"
 
 
 def default_appearance_settings() -> AppearanceSettings:
@@ -32,6 +93,9 @@ def default_appearance_settings() -> AppearanceSettings:
         item_selected_bg="#a9cdb4",
         show_scrollbar=True,
         item_antialias=True,
+        theme_style="eye_green",
+        glass_strength="glass",
+        accent_color="auto",
     )
 
 
@@ -43,6 +107,42 @@ def default_dark_appearance_settings() -> AppearanceSettings:
         item_selected_bg="#32445c",
         show_scrollbar=True,
         item_antialias=True,
+        theme_style="graphite_night",
+        glass_strength="glass",
+        accent_color="auto",
+    )
+
+
+
+@dataclass(frozen=True, slots=True)
+class ThemePalette:
+    window_bg: str
+    item_bg: str
+    item_selected_bg: str
+    theme_style: ThemeStyle
+    glass_strength: GlassStrength
+    accent_color: AccentColor
+
+
+def default_theme_palette() -> ThemePalette:
+    return ThemePalette(
+        window_bg="#e9f1ea",
+        item_bg="#ffffff",
+        item_selected_bg="#a9cdb4",
+        theme_style="eye_green",
+        glass_strength="glass",
+        accent_color="auto",
+    )
+
+
+def default_dark_theme_palette() -> ThemePalette:
+    return ThemePalette(
+        window_bg="#1d2430",
+        item_bg="#27303f",
+        item_selected_bg="#32445c",
+        theme_style="graphite_night",
+        glass_strength="glass",
+        accent_color="auto",
     )
 
 
@@ -68,8 +168,16 @@ def effective_appearance(
             font_size=max(10, min(28, int(user_appearance.font_size))),
             show_scrollbar=bool(user_appearance.show_scrollbar),
             item_antialias=bool(user_appearance.item_antialias),
+            theme_style=normalize_theme_style(user_appearance.theme_style),
+            glass_strength=normalize_glass_strength(user_appearance.glass_strength),
+            accent_color=normalize_accent_color(user_appearance.accent_color),
         )
-    return user_appearance
+    return replace(
+        user_appearance,
+        theme_style=normalize_theme_style(user_appearance.theme_style),
+        glass_strength=normalize_glass_strength(user_appearance.glass_strength),
+        accent_color=normalize_accent_color(user_appearance.accent_color),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +250,9 @@ class ThemeTokens:
     note_badge_radius: int = 7
     note_badge_padding_x: int = 8
     note_badge_padding_y: int = 3
+    glass_strength: GlassStrength = "glass"
+    theme_style: ThemeStyle = "eye_green"
+    accent_color: AccentColor = "auto"
 
 
 def _clamp(value: int) -> int:
@@ -204,8 +315,93 @@ def _contrast_text(background: tuple[int, int, int]) -> str:
     return "#f5f8ff" if _luminance(background) < 145 else "#242a33"
 
 
+def _theme_palette_for_appearance(
+    appearance: AppearanceSettings,
+    is_dark_window: bool,
+) -> ThemePalette:
+    style = normalize_theme_style(appearance.theme_style)
+    dark = default_dark_theme_palette()
+    if is_dark_window and style != "graphite_night":
+        return dark
+    palettes: dict[ThemeStyle, ThemePalette] = {
+        "simple_white": ThemePalette(
+            window_bg="#f6f9ff",
+            item_bg="#ffffff",
+            item_selected_bg="#8fc1f3",
+            theme_style="simple_white",
+            glass_strength=normalize_glass_strength(appearance.glass_strength),
+            accent_color=normalize_accent_color(appearance.accent_color),
+        ),
+        "eye_green": ThemePalette(
+            window_bg="#e9f1ea",
+            item_bg="#ffffff",
+            item_selected_bg="#a9cdb4",
+            theme_style="eye_green",
+            glass_strength=normalize_glass_strength(appearance.glass_strength),
+            accent_color=normalize_accent_color(appearance.accent_color),
+        ),
+        "business_blue": ThemePalette(
+            window_bg="#e8edf5",
+            item_bg="#ffffff",
+            item_selected_bg="#b7d0f0",
+            theme_style="business_blue",
+            glass_strength=normalize_glass_strength(appearance.glass_strength),
+            accent_color=normalize_accent_color(appearance.accent_color),
+        ),
+        "graphite_night": dark,
+        "glacier_blue": ThemePalette(
+            window_bg="#edf7ff",
+            item_bg="#ffffff",
+            item_selected_bg="#a8d8f0",
+            theme_style="glacier_blue",
+            glass_strength=normalize_glass_strength(appearance.glass_strength),
+            accent_color=normalize_accent_color(appearance.accent_color),
+        ),
+        "misty_green": ThemePalette(
+            window_bg="#eef6f1",
+            item_bg="#ffffff",
+            item_selected_bg="#b9d8c8",
+            theme_style="misty_green",
+            glass_strength=normalize_glass_strength(appearance.glass_strength),
+            accent_color=normalize_accent_color(appearance.accent_color),
+        ),
+    }
+    return palettes[style]
+
+
+_ACCENT_COLOR_HEX = {
+    "blue": "#1677c8",
+    "cyan": "#18a6ad",
+    "green": "#4f9d69",
+    "orange": "#d97706",
+    "purple": "#8b5cf6",
+}
+
+
+def _resolve_accent_color(
+    accent_color: AccentColor,
+    is_dark_window: bool,
+) -> tuple[str, str, str, str]:
+    if accent_color == "auto":
+        return (
+            "#28b7d6" if is_dark_window else "#1677c8",
+            "#42c9e4" if is_dark_window else "#248bdc",
+            "#1694b5" if is_dark_window else "#0f62aa",
+            "#59d4e9" if is_dark_window else "#5ab7ed",
+        )
+    base = _ACCENT_COLOR_HEX[accent_color]
+    rgb = _hex_to_rgb(base, "#1677c8")
+    hover = _rgb_to_hex(_lighten(rgb, 0.12 if not is_dark_window else 0.08))
+    pressed = _rgb_to_hex(_darken(rgb, 0.18 if not is_dark_window else 0.12))
+    border = _rgb_to_hex(_lighten(rgb, 0.24 if not is_dark_window else 0.10))
+    return base, hover, pressed, border
+
+
 def build_theme_tokens_from_appearance(appearance: AppearanceSettings) -> ThemeTokens:
     defaults = default_appearance_settings()
+    style = normalize_theme_style(appearance.theme_style)
+    glass_strength = normalize_glass_strength(appearance.glass_strength)
+    accent_color = normalize_accent_color(appearance.accent_color)
     window_hex = normalize_hex_color(appearance.window_bg, defaults.window_bg)
     item_hex = normalize_hex_color(appearance.item_bg, defaults.item_bg)
     selected_hex = normalize_hex_color(appearance.item_selected_bg, defaults.item_selected_bg)
@@ -213,9 +409,19 @@ def build_theme_tokens_from_appearance(appearance: AppearanceSettings) -> ThemeT
     show_scrollbar = bool(appearance.show_scrollbar)
 
     window_rgb = _hex_to_rgb(window_hex, defaults.window_bg)
+    is_dark_window = _luminance(window_rgb) < 145
+    palette = _theme_palette_for_appearance(appearance, is_dark_window)
+    window_hex = palette.window_bg if style != "graphite_night" or is_dark_window else appearance.window_bg
+    item_hex = palette.item_bg if style != "graphite_night" or is_dark_window else appearance.item_bg
+    selected_hex = palette.item_selected_bg if style != "graphite_night" or is_dark_window else appearance.item_selected_bg
+    window_rgb = _hex_to_rgb(window_hex, defaults.window_bg)
     item_rgb = _hex_to_rgb(item_hex, defaults.item_bg)
     selected_rgb = _hex_to_rgb(selected_hex, defaults.item_selected_bg)
-    is_dark_window = _luminance(window_rgb) < 145
+
+    accent_bg, accent_hover_bg, accent_pressed_bg, accent_border = _resolve_accent_color(
+        accent_color,
+        is_dark_window,
+    )
 
     if is_dark_window:
         text_primary = "#e2e9f5"
@@ -242,7 +448,7 @@ def build_theme_tokens_from_appearance(appearance: AppearanceSettings) -> ThemeT
         panel_border = _rgb_to_hex(_lighten(window_rgb, 0.16))
         input_bg = _rgb_to_hex(_lighten(window_rgb, 0.07))
         input_border = _rgb_to_hex(_lighten(window_rgb, 0.20))
-        input_focus = "#39a7d9"
+        input_focus = accent_bg
         selection_bg = _rgb_to_hex(_darken(selected_rgb, 0.08))
         selection_text = _contrast_text(_hex_to_rgb(selection_bg, selected_hex))
         disabled_bg = _rgb_to_hex(_lighten(window_rgb, 0.03))
@@ -290,7 +496,7 @@ def build_theme_tokens_from_appearance(appearance: AppearanceSettings) -> ThemeT
         item_hover_bg=item_hex,
         item_hover_border="#dbe7f3" if not is_dark_window else _rgb_to_hex(_tone(item_rgb, -0.30)),
         item_selected_bg=selected_hex,
-        item_selected_border="#38a7dc" if not is_dark_window else _rgb_to_hex(_darken(selected_rgb, 0.24)),
+        item_selected_border=accent_border if not is_dark_window else _rgb_to_hex(_darken(selected_rgb, 0.24)),
         item_selected_text=item_selected_text,
         tab_list_bg=panel_bg,
         item_list_bg=panel_bg,
@@ -337,9 +543,15 @@ def build_theme_tokens_from_appearance(appearance: AppearanceSettings) -> ThemeT
         base_font_size=font_size,
         show_scrollbar=show_scrollbar,
         is_dark=is_dark_window,
-        note_badge_bg_alpha=34,
-        note_badge_radius=6,
+        note_badge_bg_alpha=34 if is_dark_window else 52,
+        note_badge_radius=7,
+        note_badge_padding_x=8,
+        note_badge_padding_y=3,
+        glass_strength=glass_strength,
+        theme_style=style,
+        accent_color=accent_color,
     )
+
 
 
 def default_light_business_theme() -> ThemeTokens:
@@ -367,34 +579,48 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
     scroll_h_size = "8px" if tokens.show_scrollbar else "0px"
     handle_v_min = "32px" if tokens.show_scrollbar else "0px"
     handle_h_min = "32px" if tokens.show_scrollbar else "0px"
+    accent_bg, accent_hover_bg, accent_pressed_bg, accent_border = _resolve_accent_color(
+        normalize_accent_color(tokens.accent_color),
+        tokens.is_dark,
+    )
+    if tokens.glass_strength == "standard":
+        left_alpha = 222 if tokens.is_dark else 228
+        nav_alpha = 190 if tokens.is_dark else 178
+        row_alpha = 24 if tokens.is_dark else 176
+        footer_alpha = 186 if tokens.is_dark else 174
+        item_alpha = 186 if tokens.is_dark else 176
+    elif tokens.glass_strength == "glass":
+        left_alpha = 184 if tokens.is_dark else 184
+        nav_alpha = 132 if tokens.is_dark else 96
+        row_alpha = 12 if tokens.is_dark else 104
+        footer_alpha = 128 if tokens.is_dark else 110
+        item_alpha = 158 if tokens.is_dark else 128
+    else:
+        left_alpha = 160 if tokens.is_dark else 150
+        nav_alpha = 92 if tokens.is_dark else 72
+        row_alpha = 8 if tokens.is_dark else 62
+        footer_alpha = 92 if tokens.is_dark else 78
+        item_alpha = 132 if tokens.is_dark else 96
+    left_panel_bg = f"rgba(15, 27, 48, {left_alpha})" if tokens.is_dark else f"rgba(246, 250, 255, {left_alpha})"
+    nav_bg = f"rgba(12, 24, 44, {nav_alpha})" if tokens.is_dark else f"rgba(232, 242, 252, {nav_alpha})"
+    footer_bg = f"rgba(12, 24, 44, {footer_alpha})" if tokens.is_dark else f"rgba(232, 242, 252, {footer_alpha})"
+    row_bg = f"rgba(255, 255, 255, {row_alpha})"
+    search_bg = f"rgba(255, 255, 255, {item_alpha})"
+    search_hover_bg = f"rgba(255, 255, 255, {item_alpha + 18})"
+    search_focus_bg = f"rgba(255, 255, 255, {item_alpha + 32})"
     if tokens.is_dark:
-        accent_bg = "#28b7d6"
-        accent_hover_bg = "#42c9e4"
-        accent_pressed_bg = "#1694b5"
-        accent_border = "#59d4e9"
-        left_panel_bg = "rgba(15, 27, 48, 214)"
         tab_hover_bg = "rgba(255, 255, 255, 26)"
         tab_selected_bg = "rgba(40, 183, 214, 54)"
         tab_selected_border = "rgba(89, 212, 233, 138)"
-        nav_bg = "rgba(12, 24, 44, 176)"
         nav_hover_bg = "rgba(255, 255, 255, 22)"
-        row_bg = "rgba(255, 255, 255, 12)"
         row_border = "rgba(255, 255, 255, 28)"
-        footer_bg = "rgba(12, 24, 44, 168)"
     else:
-        accent_bg = "#1677c8"
-        accent_hover_bg = "#248bdc"
-        accent_pressed_bg = "#0f62aa"
-        accent_border = "#5ab7ed"
-        left_panel_bg = "rgba(246, 250, 255, 218)"
         tab_hover_bg = "rgba(15, 23, 42, 14)"
         tab_selected_bg = "rgba(22, 119, 200, 22)"
         tab_selected_border = "rgba(22, 119, 200, 72)"
-        nav_bg = "rgba(232, 242, 252, 128)"
         nav_hover_bg = "rgba(15, 23, 42, 12)"
-        row_bg = "rgba(255, 255, 255, 142)"
         row_border = "rgba(83, 126, 166, 56)"
-        footer_bg = "rgba(232, 242, 252, 150)"
+
     return f"""
         QMainWindow {{
             background: {tokens.main_window_bg};
@@ -631,16 +857,16 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
             min-height: 38px;
             padding: 0 14px;
             border-radius: 19px;
-            background: rgba(255, 255, 255, 142);
+            background: {search_bg};
             border: 1px solid rgba(255, 255, 255, 150);
             color: {tokens.text_primary};
         }}
         QLineEdit#globalSearchInput:hover {{
-            background: rgba(255, 255, 255, 158);
+            background: {search_hover_bg};
             border-color: rgba(255, 255, 255, 190);
         }}
         QLineEdit#globalSearchInput:focus {{
-            background: rgba(255, 255, 255, 174);
+            background: {search_focus_bg};
             border: 1px solid {accent_border};
         }}
         QToolButton {{
