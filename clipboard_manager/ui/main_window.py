@@ -470,12 +470,12 @@ def _create_search_icon() -> QIcon:
     return QIcon(pixmap)
 
 
-def _create_add_icon() -> QIcon:
+def _create_add_icon(color_hex: str = "#FFFFFF") -> QIcon:
     pixmap = QPixmap(18, 18)
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-    pen = QPen(QColor("#FFFFFF"))
+    pen = QPen(QColor(color_hex))
     pen.setWidthF(2.1)
     pen.setCapStyle(Qt.PenCapStyle.RoundCap)
     painter.setPen(pen)
@@ -2570,6 +2570,9 @@ class MainWindow(QMainWindow):
         else:
             self.setStyleSheet(app_stylesheet)
         self.settings_menu.setStyleSheet(self._menu_stylesheet())
+        self.add_item_btn.setIcon(
+            _create_add_icon("#FFFFFF" if self._theme_tokens.is_dark else "#1f2937")
+        )
         if self._tray_menu is not None:
             self._tray_menu.setStyleSheet(self._menu_stylesheet())
 

@@ -490,6 +490,17 @@ class SettingsDialog(ResizableDialog):
         header.addStretch(1)
         layout.addLayout(header)
 
+        repo_link = QLabel(
+            '<a href="https://github.com/fancha0/ClipNest">github.com/fancha0/ClipNest</a>',
+            page,
+        )
+        repo_link.setOpenExternalLinks(False)
+        repo_link.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        repo_link.linkActivated.connect(
+            lambda url: QDesktopServices.openUrl(QUrl(url))
+        )
+        layout.addWidget(repo_link)
+
         self.current_version_label = QLabel(f"当前版本 v{APP_VERSION}", page)
         layout.addWidget(self.current_version_label)
 
