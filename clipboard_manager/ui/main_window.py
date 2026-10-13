@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
 import sys
 import time
@@ -1233,8 +1234,17 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(APP_NAME)
+        # Tool window: no taskbar button, so the panel is accessed via the tray
+        # icon or the global hotkey (matches a clipboard popup's role).
+        self.setWindowFlag(Qt.WindowType.Tool, True)
         self.resize(980, 620)
         self._apply_app_icon()
+        self._panel_visible = False
+        self._foreground_generation = 0
+        self._panel_had_focus = False
+        self._panel_watch_timer = QTimer(self)
+        self._panel_watch_timer.setInterval(250)
+        self._panel_watch_timer.timeout.connect(self._check_panel_foreground)
         self._hotkey_text = ""
         self._active_settings_dialog: Optional[SettingsDialog] = None
         self._update_dialog: Optional[UpdateDialog] = None
@@ -2029,13 +2039,17 @@ class MainWindow(QMainWindow):
             splitter_count,
         )
         # Prevent immediate auto-hide when hotkey-triggered show races with focus events.
-        self._suspend_auto_hide_for(1500)
+        self._suspend_auto_hide_for(300)
+        self._panel_visible = True
+        self._foreground_generation += 1
+        generation = self._foreground_generation
         self.show()
         self.setWindowState(
             (self.windowState() & ~Qt.WindowState.WindowMinimized) | Qt.WindowState.WindowActive
         )
         self.raise_()
         self.activateWindow()
+        self._panel_had_focus = self._panel_had_focus or self.isActiveWindow()
         logger.info(
             "[UI] show_for_quick_paste post-show visible=%s active=%s minimized=%s",
             self.isVisible(),
@@ -2043,13 +2057,13 @@ class MainWindow(QMainWindow):
             bool(self.windowState() & Qt.WindowState.WindowMinimized),
         )
         if sys.platform == "win32":
-            self._force_foreground_windows()
+            self._force_foreground_windows(generation)
             # Retry sequence to improve reliability when foreground lock blocks first attempt.
-            QTimer.singleShot(60, self._force_foreground_windows)
-            QTimer.singleShot(180, self._force_foreground_windows)
+            QTimer.singleShot(60, lambda: self._force_foreground_windows(generation))
+            QTimer.singleShot(180, lambda: self._force_foreground_windows(generation))
         if self.item_list.count() > 0:
             self.item_list.setFocus(Qt.FocusReason.ActiveWindowFocusReason)
-        QTimer.singleShot(260, self._ensure_hotkey_window_visible)
+        QTimer.singleShot(260, lambda: self._ensure_hotkey_window_visible(generation))
 
     def _release_auto_hide_suspend(self) -> None:
         self._auto_hide_suspend_count = max(0, self._auto_hide_suspend_count - 1)
@@ -2058,7 +2072,9 @@ class MainWindow(QMainWindow):
         self._auto_hide_suspend_count += 1
         QTimer.singleShot(max(10, int(milliseconds)), self._release_auto_hide_suspend)
 
-    def _ensure_hotkey_window_visible(self) -> None:
+    def _ensure_hotkey_window_visible(self, generation: int | None = None) -> None:
+        if generation is not None and generation != self._foreground_generation:
+            return
         logger.info(
             "[UI] ensure_hotkey_window_visible visible=%s active=%s",
             self.isVisible(),
@@ -2091,8 +2107,11 @@ class MainWindow(QMainWindow):
             2500,
         )
 
-    def _force_foreground_windows(self) -> None:
+    def _force_foreground_windows(self, generation: int | None = None) -> None:
         if sys.platform != "win32":
+            return
+        if generation is not None and generation != self._foreground_generation:
+            logger.debug("[UI] force_foreground skipped; generation stale")
             return
         # Delayed retries scheduled by show_for_quick_paste may fire after the
         # window was hidden again (fast show -> Enter-to-paste flow). Raw Win32
@@ -2158,21 +2177,87 @@ class MainWindow(QMainWindow):
             logger.warning("[UI] skip setCollapsible(1, ...): splitter count < 2")
 
     def should_hide_on_hotkey(self) -> bool:
-        return self.isVisible() and not bool(self.windowState() & Qt.WindowState.WindowMinimized)
+        return bool(self._panel_visible) and not bool(
+            self.windowState() & Qt.WindowState.WindowMinimized
+        )
+
+    def _hide_panel(self) -> None:
+        self._panel_visible = False
+        self._panel_had_focus = False
+        self._panel_watch_timer.stop()
+        self._foreground_generation += 1
+        self.hide()
+
+    def hide_panel(self) -> None:
+        self._hide_panel()
 
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
+        self._panel_visible = True
+        if not self._panel_watch_timer.isActive():
+            self._panel_watch_timer.start()
+        elif self.isActiveWindow():
+            self._panel_had_focus = True
         # The native handle only exists once shown; re-apply so a hidden-at-startup
         # window still gets the themed caption.
         self._apply_titlebar_theme()
         self.window_shown.emit()
+
+    def hideEvent(self, event) -> None:
+        self._panel_visible = False
+        self._panel_had_focus = False
+        self._panel_watch_timer.stop()
+        super().hideEvent(event)
+
+    def _foreground_window_owner_is_self(self) -> Optional[bool]:
+        """True if the current foreground window belongs to this process."""
+        if sys.platform != "win32":
+            return None
+        try:
+            import ctypes
+
+            user32 = ctypes.windll.user32
+            hwnd = user32.GetForegroundWindow()
+            if not hwnd:
+                return None
+            pid = ctypes.c_ulong(0)
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            return pid.value == os.getpid()
+        except Exception:
+            return None
+
+    def _check_panel_foreground(self) -> None:
+        """Safety net for auto-hide when WindowDeactivate is not delivered
+        (some apps such as IM clients take foreground without a clean event)."""
+        if not self._panel_visible:
+            self._panel_watch_timer.stop()
+            return
+        if self._auto_hide_suspend_count > 0:
+            return
+        if self._allow_close:
+            return
+        if self._tray_icon is None or not self._tray_icon.isVisible():
+            return
+        if QApplication.activeModalWidget() is not None:
+            return
+        if bool(self.windowState() & Qt.WindowState.WindowMinimized):
+            return
+        owner = self._foreground_window_owner_is_self()
+        if owner is None:
+            return
+        if owner:
+            self._panel_had_focus = True
+            return
+        if not self._panel_had_focus:
+            return
+        self._hide_panel()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self._allow_close or self._tray_icon is None or not self._tray_icon.isVisible():
             event.accept()
             return
         event.ignore()
-        self.hide()
+        self._hide_panel()
         self._show_tray_hint_once()
 
     def confirm(self, title: str, message: str) -> bool:
@@ -2203,7 +2288,11 @@ class MainWindow(QMainWindow):
 
     def event(self, event: QEvent) -> bool:
         if event.type() == QEvent.Type.WindowDeactivate:
+            # Cancel any pending forced-foreground so it cannot pull focus back.
+            self._foreground_generation += 1
             QTimer.singleShot(0, self._hide_on_deactivate)
+        elif event.type() == QEvent.Type.WindowActivate:
+            self._panel_had_focus = True
         return super().event(event)
 
     def eventFilter(self, watched, event: QEvent) -> bool:
@@ -2253,13 +2342,15 @@ class MainWindow(QMainWindow):
         self._activate_current_item()
 
     def _hide_on_deactivate(self) -> None:
-        if self._auto_hide_suspend_count > 0:
-            return
         if self._allow_close:
             return
         if self._tray_icon is None or not self._tray_icon.isVisible():
             return
-        if not self.isVisible():
+        if not self._panel_visible:
+            return
+        if self._auto_hide_suspend_count > 0:
+            # Focus is still settling right after a hotkey show; the foreground
+            # watch timer will hide it once the suspend window expires.
             return
         if bool(self.windowState() & Qt.WindowState.WindowMinimized):
             return
@@ -2267,7 +2358,7 @@ class MainWindow(QMainWindow):
             return
         if QApplication.activeModalWidget() is not None:
             return
-        self.hide()
+        self._hide_panel()
 
     def _exec_modal_dialog(self, dialog: QDialog) -> int:
         self._auto_hide_suspend_count += 1

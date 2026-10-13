@@ -388,7 +388,7 @@ class AppController:
             bool(self._window.windowState() & Qt.WindowState.WindowMinimized),
         )
         if self._window.should_hide_on_hotkey():
-            self._window.hide()
+            self._window.hide_panel()
             self._pending_focus_target = None
             logger.info("[Hotkey] panel hidden by toggle logic")
             return
