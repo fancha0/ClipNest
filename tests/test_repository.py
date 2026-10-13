@@ -32,6 +32,24 @@ class ClipRepositoryTests(unittest.TestCase):
         for suffix in ("", "-wal", "-shm"):
             Path(f"{self.db_path}{suffix}").unlink(missing_ok=True)
 
+    def test_stats_counts_items_and_images(self) -> None:
+        repo = self._make_repo(self.db_path, max_items_per_tab=500)
+        tab_id = _tab_ids(repo)[0]
+        repo.upsert_text_item(tab_id, "one")
+        repo.upsert_text_item(tab_id, "two")
+        stats = repo.stats()
+        self.assertGreaterEqual(stats["tabs"], 1)
+        self.assertEqual(stats["items"], 2)
+        self.assertGreaterEqual(stats["db_bytes"], 0)
+
+    def test_clear_all_items_keeps_tabs(self) -> None:
+        repo = self._make_repo(self.db_path, max_items_per_tab=500)
+        tab_ids = _tab_ids(repo)
+        repo.upsert_text_item(tab_ids[0], "keep-tab")
+        repo.clear_all_items()
+        self.assertEqual(repo.stats()["items"], 0)
+        self.assertEqual(len(_tab_ids(repo)), len(tab_ids))
+
     def test_dedupe_within_same_tab(self) -> None:
         repo = self._make_repo(self.db_path, max_items_per_tab=500)
         tab_id = _tab_ids(repo)[0]

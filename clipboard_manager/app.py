@@ -14,6 +14,8 @@ from .services.clipboard_service import ClipboardService
 from .services.focus_service import FocusService
 from .services.hotkey_service import HotkeyService
 from .services.paste_service import PasteService
+from .services.single_instance import SingleInstance
+from .ui.feedback import MessageDialog
 from .ui.main_window import MainWindow
 
 
@@ -33,6 +35,20 @@ def _attach_file_logging() -> None:
         logging.getLogger(__name__).debug("file logging unavailable", exc_info=True)
 
 
+def _notify_already_running() -> None:
+    try:
+        MessageDialog(
+            None,
+            APP_NAME,
+            f"{APP_NAME} 已在运行，请查看系统托盘中的图标。",
+            kind="info",
+        ).exec()
+    except Exception:
+        logging.getLogger(__name__).debug(
+            "already-running notice failed", exc_info=True
+        )
+
+
 def run() -> int:
     logging.basicConfig(
         level=logging.INFO,
@@ -45,6 +61,13 @@ def run() -> int:
     app_icon = resolve_app_icon(app)
     if not app_icon.isNull():
         app.setWindowIcon(app_icon)
+
+    instance = SingleInstance(APP_NAME)
+    if instance.already_running:
+        _notify_already_running()
+        instance.release()
+        return 0
+
     clipboard = app.clipboard()
 
     repository = ClipRepository(database_path())

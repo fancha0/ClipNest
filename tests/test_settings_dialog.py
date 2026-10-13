@@ -76,6 +76,48 @@ class SettingsDialogApplyTests(unittest.TestCase):
         dialog.set_apply_feedback("已应用")
         self.assertEqual(dialog.apply_status_label.text(), "已应用")
 
+    def test_capture_enabled_defaults_true(self) -> None:
+        dialog = self._make_dialog()
+        self.assertTrue(dialog.result_payload().capture_enabled)
+
+    def test_capture_enabled_toggle_reflected_in_payload(self) -> None:
+        dialog = self._make_dialog()
+        dialog.capture_enabled_chk.setChecked(False)
+        self.assertFalse(dialog.result_payload().capture_enabled)
+
+    def test_capture_toggle_hotkey_defaults_to_ctrl_shift_p(self) -> None:
+        dialog = self._make_dialog()
+        self.assertEqual(dialog.result_payload().capture_toggle_hotkey, "Ctrl+Shift+P")
+
+    def test_data_stats_labels_update(self) -> None:
+        dialog = self._make_dialog()
+        dialog.set_data_stats({"tabs": 3, "items": 12, "images": 4, "db_bytes": 2048})
+        self.assertEqual(dialog.data_tabs_label.text(), "3")
+        self.assertEqual(dialog.data_items_label.text(), "12")
+        self.assertEqual(dialog.data_images_label.text(), "4")
+        self.assertIn("KB", dialog.data_size_label.text())
+
+    def test_shortcut_overview_rows(self) -> None:
+        dialog = self._make_dialog()
+        rows = dict(dialog._shortcut_rows())
+        self.assertIn("打开面板", rows)
+        self.assertIn("搜索条目", rows)
+        self.assertEqual(rows["搜索条目"], "Ctrl + F")
+
+    def test_settings_search_filters_rows(self) -> None:
+        from clipboard_manager.ui.settings_widgets import SettingRow
+
+        dialog = self._make_dialog()
+        dialog._apply_settings_filter("玻璃强度")
+        rows = dialog.findChildren(SettingRow)
+        matched = [row for row in rows if "玻璃强度" in row.search_text()]
+        unmatched = [row for row in rows if "开机" in row.search_text()]
+        self.assertTrue(matched)
+        self.assertTrue(all(not row.isHidden() for row in matched))
+        self.assertTrue(all(row.isHidden() for row in unmatched))
+        dialog._apply_settings_filter("")
+        self.assertTrue(all(not row.isHidden() for row in rows))
+
     def test_about_page_shows_versions(self) -> None:
         dialog = self._make_dialog()
         self.assertIn("当前版本 v", dialog.current_version_label.text())

@@ -48,7 +48,6 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QHBoxLayout,
-    QInputDialog,
     QProgressDialog,
     QLabel,
     QLineEdit,
@@ -56,7 +55,6 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMenu,
-    QMessageBox,
     QPushButton,
     QSplitter,
     QStyle,
@@ -80,6 +78,14 @@ from .image_codec import encode_qimage_to_payload
 from .titlebar_theme import apply_titlebar_theme
 from .item_presenter import present_item
 from .item_delegate import ClipItemDelegate
+from .feedback import (
+    MessageDialog,
+    NoteEditDialog,
+    TextInputDialog,
+    show_confirm,
+    show_toast,
+)
+from .icons import line_icon, menu_icon, resolved_line_icon
 from .theme import (
     AppearanceSettings,
     ThemeTokens,
@@ -402,7 +408,8 @@ class BundleImageInputList(ImageMimeMixin, QListWidget):
 
     def _open_context_menu(self, pos) -> None:
         menu = QMenu(self)
-        paste_action = menu.addAction("粘贴图片")
+        menu.setObjectName("glassMenu")
+        paste_action = menu.addAction(line_icon("copy", "#4a5866"), "粘贴图片")
         selected = menu.exec(self.mapToGlobal(pos))
         if selected == paste_action:
             self.paste_images_from_clipboard()
@@ -410,7 +417,7 @@ class BundleImageInputList(ImageMimeMixin, QListWidget):
     def paste_images_from_clipboard(self) -> bool:
         if self._emit_images_from_mime_data(QApplication.clipboard().mimeData()):
             return True
-        QMessageBox.warning(self, "提示", "剪贴板中没有可用图片。")
+        MessageDialog(self, "提示", "剪贴板中没有可用图片。", kind="warning").exec()
         return False
 
     def _emit_images_from_mime_data(self, mime_data) -> bool:
@@ -1027,17 +1034,17 @@ class EditItemDialog(ResizableDialog):
     def _load_image_from_clipboard(self) -> None:
         image = QApplication.clipboard().image()
         if image.isNull():
-            QMessageBox.warning(self, "提示", "剪贴板中没有图片。")
+            MessageDialog(self, "提示", "剪贴板中没有图片。", kind="warning").exec()
             return
         data = QByteArray()
         buf = QBuffer(data)
         if not buf.open(QIODevice.OpenModeFlag.WriteOnly):
-            QMessageBox.warning(self, "提示", "读取剪贴板图片失败。")
+            MessageDialog(self, "提示", "读取剪贴板图片失败。", kind="warning").exec()
             return
         saved = image.save(buf, "PNG")
         buf.close()
         if not saved:
-            QMessageBox.warning(self, "提示", "转换剪贴板图片失败。")
+            MessageDialog(self, "提示", "转换剪贴板图片失败。", kind="warning").exec()
             return
         self._image_bytes = bytes(data)
         self._image_width = image.width()
@@ -1062,12 +1069,12 @@ class EditItemDialog(ResizableDialog):
     def _on_accept(self) -> None:
         if self._result_type == "image":
             if not self._image_bytes:
-                QMessageBox.warning(self, "提示", "请先从剪贴板载入图片。")
+                MessageDialog(self, "提示", "请先从剪贴板载入图片。", kind="warning").exec()
                 return
             self.accept()
             return
         if self.text_edit.toPlainText().strip() == "":
-            QMessageBox.warning(self, "提示", "文本内容不能为空。")
+            MessageDialog(self, "提示", "文本内容不能为空。", kind="warning").exec()
             return
         self.accept()
 
@@ -1143,7 +1150,7 @@ class MultiSelectDialog(ResizableDialog):
 
     def _on_accept(self) -> None:
         if not self.selected_keys():
-            QMessageBox.warning(self, "提示", "请至少选择一项。")
+            MessageDialog(self, "提示", "请至少选择一项。", kind="warning").exec()
             return
         self.accept()
 
@@ -1215,6 +1222,8 @@ class MainWindow(QMainWindow):
     start_inline_edit_requested = Signal(int)
     save_inline_edit_requested = Signal(int, object)
     autostart_change_requested = Signal(bool)
+    capture_enabled_changed = Signal(bool)
+    clear_all_data_requested = Signal()
     window_shown = Signal()
     settings_save_requested = Signal(object)
     check_update_requested = Signal()
@@ -1236,6 +1245,10 @@ class MainWindow(QMainWindow):
         self._capture_tab_id: Optional[int] = None
         self._capture_tab_max: int = MAX_ITEMS_PER_TAB
         self._autostart_enabled = False
+        self._capture_enabled = True
+        self._capture_hotkey_hint = "Ctrl+Shift+P"
+        self._capture_toggle_action: Optional[QAction] = None
+        self._data_stats_provider = None
         self._note_text_color = "#1f2937"
         self._note_font_size = 13
         self._pinned_accent_color = "#1fb8cb"
@@ -1355,24 +1368,34 @@ class MainWindow(QMainWindow):
         self.search_input.setMaximumWidth(360)
         self.update_button = QPushButton("发现更新")
         self.update_button.setObjectName("updateButton")
-        self.update_button.setFixedHeight(34)
+        self.update_button.setFixedHeight(30)
         self.update_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.update_button.setToolTip("打开最新版本更新窗口")
         self.update_button.clicked.connect(self._on_update_button_clicked)
         self.update_button.setVisible(False)
+        self.capture_toggle_btn = QToolButton(self)
+        self.capture_toggle_btn.setObjectName("captureToggleButton")
+        self.capture_toggle_btn.setCheckable(True)
+        self.capture_toggle_btn.setChecked(True)
+        self.capture_toggle_btn.setText("监听中")
+        self.capture_toggle_btn.setFixedHeight(30)
+        self.capture_toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.capture_toggle_btn.setToolTip("自动记录剪贴板：开（点击暂停）")
         self.add_item_btn = QToolButton()
         self.add_item_btn.setObjectName("addItemButton")
         self.add_item_btn.setIcon(_create_add_icon())
         self.add_item_btn.setIconSize(QSize(18, 18))
         self.add_item_btn.setToolTip("新建条目（Ctrl+N）")
-        self.add_item_btn.setFixedSize(QSize(38, 34))
+        self.add_item_btn.setFixedSize(QSize(34, 30))
         self.settings_button = QToolButton()
         self.settings_button.setObjectName("settingsButton")
-        self.settings_button.setText("⚙")
+        self.settings_button.setIcon(resolved_line_icon("gear", False, 18))
+        self.settings_button.setIconSize(QSize(18, 18))
         self.settings_button.setToolTip("设置")
-        self.settings_button.setFixedSize(QSize(38, 34))
+        self.settings_button.setFixedSize(QSize(34, 30))
         tools.addWidget(self.search_input, 1)
         tools.addStretch(1)
+        tools.addWidget(self.capture_toggle_btn)
         tools.addWidget(self.update_button)
         tools.addWidget(self.add_item_btn)
         tools.addWidget(self.settings_button)
@@ -1442,6 +1465,7 @@ class MainWindow(QMainWindow):
         self.tab_list.rows_manually_reordered.connect(self._on_tab_rows_moved)
         self.tab_list.customContextMenuRequested.connect(self._open_tab_context_menu)
         self.add_item_btn.clicked.connect(self._prompt_add_item)
+        self.capture_toggle_btn.toggled.connect(self._on_capture_toggle_button)
         self.search_input.textChanged.connect(self._on_search_input_changed)
 
         self._focus_search_shortcut = QShortcut(QKeySequence("Ctrl+F"), self)
@@ -1459,13 +1483,63 @@ class MainWindow(QMainWindow):
         self._apply_theme()
 
     def _build_settings_menu(self) -> None:
-        self.settings_menu = QMenu(self)
-        self.settings_menu.setObjectName("glassMenu")
-        self.settings_menu.setStyleSheet(self._menu_stylesheet())
         self.settings_button.clicked.connect(self._open_settings_dialog)
 
     def set_autostart_state(self, enabled: bool) -> None:
         self._autostart_enabled = bool(enabled)
+
+    def capture_enabled(self) -> bool:
+        return bool(self._capture_enabled)
+
+    def _capture_hotkey_text(self) -> str:
+        return getattr(self, "_capture_hotkey_hint", "Ctrl+Shift+P")
+
+    def set_capture_toggle_hotkey_text(self, hotkey_text: str) -> None:
+        self._capture_hotkey_hint = str(hotkey_text or "Ctrl+Shift+P")
+        self.set_capture_enabled(self._capture_enabled)
+
+    def set_data_stats_provider(self, provider) -> None:
+        self._data_stats_provider = provider
+
+    def refresh_settings_data_stats(self) -> None:
+        dialog = self._active_settings_dialog
+        if dialog is None or self._data_stats_provider is None:
+            return
+        try:
+            dialog.set_data_stats(self._data_stats_provider())
+        except Exception:
+            logger.debug("refresh settings data stats failed", exc_info=True)
+
+    def set_capture_enabled(self, enabled: bool) -> None:
+        self._capture_enabled = bool(enabled)
+        button = getattr(self, "capture_toggle_btn", None)
+        if button is not None:
+            button.blockSignals(True)
+            button.setChecked(self._capture_enabled)
+            button.setText("监听中" if self._capture_enabled else "已暂停")
+            button.setToolTip(
+                f"自动记录剪贴板：{'开（点击暂停）' if self._capture_enabled else '关（点击开启）'}"
+                f"　快捷键 {self._capture_hotkey_text()}"
+            )
+            button.blockSignals(False)
+        action = getattr(self, "_capture_toggle_action", None)
+        if action is not None:
+            action.blockSignals(True)
+            action.setChecked(self._capture_enabled)
+            action.blockSignals(False)
+        tray = getattr(self, "_tray_icon", None)
+        if tray is not None:
+            tray.setToolTip(
+                APP_NAME if self._capture_enabled else f"{APP_NAME}（剪贴板监听已暂停）"
+            )
+
+    def _on_capture_toggle_button(self, checked: bool) -> None:
+        self.set_capture_enabled(bool(checked))
+        self.capture_enabled_changed.emit(bool(checked))
+
+    def _on_capture_toggle_action(self, checked: bool) -> None:
+        self.set_capture_enabled(bool(checked))
+        self.capture_enabled_changed.emit(bool(checked))
 
     def _open_settings_dialog(self) -> None:
         dialog = SettingsDialog(
@@ -1482,10 +1556,16 @@ class MainWindow(QMainWindow):
             tabs=[(tab.id, tab.name) for tab in self._tabs_snapshot],
             auto_check_update=self._auto_check_update,
             diagnostic_logging=self._diagnostic_logging,
+            capture_enabled=self._capture_enabled,
+            capture_toggle_hotkey=self._capture_hotkey_text(),
+            data_stats=(
+                self._data_stats_provider() if self._data_stats_provider else None
+            ),
         )
         self._active_settings_dialog = dialog
         dialog.apply_requested.connect(self._on_settings_apply_requested)
         dialog.check_update_requested.connect(self.check_update_requested.emit)
+        dialog.clear_data_requested.connect(self.clear_all_data_requested.emit)
         try:
             accepted = self._exec_modal_dialog(dialog)
         finally:
@@ -2096,14 +2176,30 @@ class MainWindow(QMainWindow):
         self._show_tray_hint_once()
 
     def confirm(self, title: str, message: str) -> bool:
-        answer = QMessageBox.question(self, title, message)
-        return answer == QMessageBox.StandardButton.Yes
+        return show_confirm(
+            self,
+            title,
+            message,
+            confirm_text="删除",
+            destructive=True,
+        )
 
     def show_error(self, message: str) -> None:
-        QMessageBox.warning(self, "提示", message)
+        MessageDialog(self, "出错了", message, kind="error").exec()
+
+    def show_warning(self, message: str) -> None:
+        MessageDialog(self, "提示", message, kind="warning").exec()
 
     def show_info(self, message: str) -> None:
-        QMessageBox.information(self, "提示", message)
+        if self.isVisible():
+            show_toast(self, message, "success")
+        elif self._tray_icon is not None and self._tray_icon.isVisible():
+            self._tray_icon.showMessage(
+                APP_NAME,
+                message,
+                QSystemTrayIcon.MessageIcon.Information,
+                3000,
+            )
 
     def event(self, event: QEvent) -> bool:
         if event.type() == QEvent.Type.WindowDeactivate:
@@ -2237,9 +2333,16 @@ class MainWindow(QMainWindow):
         self._tray_menu = QMenu(self)
         self._tray_menu.setObjectName("glassMenu")
         self._tray_menu.setStyleSheet(self._menu_stylesheet())
-        show_action = self._tray_menu.addAction("显示主界面")
-        exit_action = self._tray_menu.addAction("退出程序")
+        dark = bool(self._theme_tokens.is_dark)
+        show_action = self._tray_menu.addAction(menu_icon("show", dark), "显示主界面")
+        self._capture_toggle_action = self._tray_menu.addAction(
+            menu_icon("capture_on", dark), "自动记录剪贴板"
+        )
+        self._capture_toggle_action.setCheckable(True)
+        self._capture_toggle_action.setChecked(bool(self._capture_enabled))
+        exit_action = self._tray_menu.addAction(menu_icon("exit", dark), "退出程序")
         show_action.triggered.connect(self.show_for_quick_paste)
+        self._capture_toggle_action.toggled.connect(self._on_capture_toggle_action)
         exit_action.triggered.connect(self._quit_application)
         self._tray_icon.setContextMenu(self._tray_menu)
         self._tray_icon.activated.connect(self._on_tray_activated)
@@ -2298,9 +2401,10 @@ class MainWindow(QMainWindow):
         menu = QMenu(self)
         menu.setObjectName("glassMenu")
         menu.setStyleSheet(self._menu_stylesheet())
-        add_action = menu.addAction("新增标签页")
-        rename_action = menu.addAction("重命名标签页")
-        delete_action = menu.addAction("删除标签页")
+        dark = bool(self._theme_tokens.is_dark)
+        add_action = menu.addAction(menu_icon("tab_add", dark), "新增标签页")
+        rename_action = menu.addAction(menu_icon("tab_rename", dark), "重命名标签页")
+        delete_action = menu.addAction(menu_icon("tab_delete", dark, danger=True), "删除标签页")
 
         has_tab = self.current_tab_id() is not None
         rename_action.setEnabled(has_tab)
@@ -2345,10 +2449,13 @@ class MainWindow(QMainWindow):
             self.item_order_changed.emit(item_ids, int(tab_id))
 
     def _prompt_add_tab(self) -> None:
+        dialog = TextInputDialog(self, "新增标签页", "标签页名称：", placeholder="例如：常用语")
         with self._with_auto_hide_suspended():
-            text, ok = QInputDialog.getText(self, "新增标签页", "标签页名称：")
-        if ok and text.strip():
-            self.create_tab_requested.emit(text)
+            accepted = self._exec_modal_dialog(dialog) == QDialog.DialogCode.Accepted
+        if accepted:
+            text = dialog.value().strip()
+            if text:
+                self.create_tab_requested.emit(text)
 
     def _prompt_rename_tab(self) -> None:
         tab_id = self.current_tab_id()
@@ -2356,10 +2463,13 @@ class MainWindow(QMainWindow):
             return
         current = self.tab_list.currentItem()
         current_name = current.text() if current else ""
+        dialog = TextInputDialog(self, "重命名标签页", "新名称：", text=current_name)
         with self._with_auto_hide_suspended():
-            text, ok = QInputDialog.getText(self, "重命名标签页", "新名称：", text=current_name)
-        if ok and text.strip():
-            self.rename_tab_requested.emit(tab_id, text)
+            accepted = self._exec_modal_dialog(dialog) == QDialog.DialogCode.Accepted
+        if accepted:
+            text = dialog.value().strip()
+            if text:
+                self.rename_tab_requested.emit(tab_id, text)
 
     def _request_delete_tab(self) -> None:
         tab_id = self.current_tab_id()
@@ -2546,19 +2656,23 @@ class MainWindow(QMainWindow):
 
             item_id = int(item.data(ITEM_ID_ROLE))
             is_pinned = bool(item.data(ITEM_PINNED_ROLE))
-            pin_action = menu.addAction("取消置顶" if is_pinned else "置顶条目")
-            edit_action = menu.addAction("编辑条目")
-            edit_note_action = menu.addAction("编辑备注")
-            move_menu = menu.addMenu("移动到")
+            dark = bool(self._theme_tokens.is_dark)
+            pin_action = menu.addAction(
+                menu_icon("pin", dark),
+                "取消置顶" if is_pinned else "置顶条目",
+            )
+            edit_action = menu.addAction(menu_icon("edit", dark), "编辑条目")
+            edit_note_action = menu.addAction(menu_icon("note", dark), "编辑备注")
+            move_menu = menu.addMenu(menu_icon("move", dark), "移动到")
             move_menu.setObjectName("glassMenu")
             move_menu.setStyleSheet(self._menu_stylesheet())
             move_actions: dict[QAction, int] = {}
             for tab in self._tabs_snapshot:
                 tab_action = move_menu.addAction(tab.name)
                 move_actions[tab_action] = int(tab.id)
-            delete_action = menu.addAction("删除条目")
+            delete_action = menu.addAction(menu_icon("delete", dark, danger=True), "删除条目")
             menu.addSeparator()
-            clear_action = menu.addAction("清空列表")
+            clear_action = menu.addAction(menu_icon("clear", dark, danger=True), "清空列表")
             with self._with_auto_hide_suspended():
                 selected = menu.exec(self.item_list.mapToGlobal(pos))
             if selected == pin_action:
@@ -2567,15 +2681,14 @@ class MainWindow(QMainWindow):
                 self.start_inline_edit_requested.emit(item_id)
             elif edit_note_action is not None and selected == edit_note_action:
                 current_note = str(item.data(ITEM_NOTE_ROLE) or "")
+                note_dialog = NoteEditDialog(self, current_note)
                 with self._with_auto_hide_suspended():
-                    note, ok = QInputDialog.getMultiLineText(
-                        self,
-                        "编辑备注",
-                        "",
-                        current_note,
+                    accepted = (
+                        self._exec_modal_dialog(note_dialog)
+                        == QDialog.DialogCode.Accepted
                     )
-                if ok:
-                    self.edit_note_requested.emit(item_id, note.strip())
+                if accepted:
+                    self.edit_note_requested.emit(item_id, note_dialog.value())
             elif selected in move_actions:
                 target_tab_id = int(move_actions[selected])
                 if len(source_tab_ids) == 1 and target_tab_id in source_tab_ids:
@@ -2616,7 +2729,9 @@ class MainWindow(QMainWindow):
         else:
             self.setFont(base_font)
             self.setStyleSheet(app_stylesheet)
-        self.settings_menu.setStyleSheet(self._menu_stylesheet())
+        self.settings_button.setIcon(
+            resolved_line_icon("gear", bool(self._theme_tokens.is_dark), 18)
+        )
         self.add_item_btn.setIcon(
             _create_add_icon("#FFFFFF" if self._theme_tokens.is_dark else "#1f2937")
         )

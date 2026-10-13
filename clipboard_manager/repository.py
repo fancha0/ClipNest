@@ -730,6 +730,28 @@ class ClipRepository:
             row = conn.execute("SELECT COUNT(*) AS c FROM items WHERE tab_id = ?", (tab_id,)).fetchone()
         return int(row["c"])
 
+    def stats(self) -> dict[str, int]:
+        with self._connect() as conn:
+            tabs = conn.execute("SELECT COUNT(*) AS c FROM tabs").fetchone()["c"]
+            items = conn.execute("SELECT COUNT(*) AS c FROM items").fetchone()["c"]
+            images = conn.execute(
+                "SELECT COUNT(*) AS c FROM items WHERE content_type = 'image'"
+            ).fetchone()["c"]
+        try:
+            db_bytes = self.db_path.stat().st_size
+        except OSError:
+            db_bytes = 0
+        return {
+            "tabs": int(tabs),
+            "items": int(items),
+            "images": int(images),
+            "db_bytes": int(db_bytes),
+        }
+
+    def clear_all_items(self) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM items")
+
     def list_items(self, tab_id: int) -> list[ClipItem]:
         with self._connect() as conn:
             rows = conn.execute(

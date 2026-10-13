@@ -91,12 +91,17 @@ class AppController:
         self._clipboard_service = clipboard_service
         self._focus_service = focus_service
         self._hotkey_service = hotkey_service
+        self._capture_toggle_hotkey_text = (
+            self._repository.get_setting("capture_toggle_hotkey") or "Ctrl+Shift+P"
+        )
+        self._capture_hotkey_service = HotkeyService(self._capture_toggle_hotkey_text)
         self._paste_service = paste_service
         self._autostart_service = AutoStartService()
         self._update_service = UpdateService()
         self._update_zip_path = ""
         self._auto_check_update = True
         self._diagnostic_logging = True
+        self._capture_enabled = True
         self._update_check_silent = False
         self._pending_focus_target: Optional[FocusTarget] = None
         self._auto_hide_on_paste = AUTO_HIDE_ON_PASTE
@@ -125,6 +130,17 @@ class AppController:
             self._repository.get_setting("diagnostic_logging") or "1"
         ) == "1"
         set_diagnostic_logging(self._diagnostic_logging)
+        self._capture_enabled = (
+            self._repository.get_setting("capture_enabled") or "1"
+        ) == "1"
+        self._window.set_capture_enabled(self._capture_enabled)
+        self._window.set_capture_toggle_hotkey_text(self._capture_toggle_hotkey_text)
+        self._window.set_data_stats_provider(self._collect_data_stats)
+        if not self._capture_hotkey_service.start():
+            logger.warning(
+                "[Hotkey] capture toggle shortcut failed to register: %s",
+                self._capture_hotkey_service.last_error,
+            )
         if self._auto_check_update:
             QTimer.singleShot(3000, self._run_startup_update_check)
 
@@ -201,6 +217,7 @@ class AppController:
 
     def shutdown(self) -> None:
         self._hotkey_service.stop()
+        self._capture_hotkey_service.stop()
         try:
             self._repository.set_setting("dialog_sizes", dump_dialog_sizes_to_setting())
         except Exception:
@@ -215,6 +232,9 @@ class AppController:
         self._clipboard_service.parsed_captured.connect(self._on_clipboard_parsed_captured)
         self._hotkey_service.hotkey_pressed.connect(self._on_hotkey_pressed)
         self._window.window_shown.connect(self._on_window_shown)
+        self._window.capture_enabled_changed.connect(self._on_capture_enabled_changed)
+        self._capture_hotkey_service.hotkey_pressed.connect(self._on_capture_hotkey_pressed)
+        self._window.clear_all_data_requested.connect(self._on_clear_all_data)
 
         self._window.tab_selected.connect(self._on_tab_selected)
         self._window.tab_order_changed.connect(self._on_tab_order_changed)
@@ -400,6 +420,46 @@ class AppController:
         if clean_value == "":
             return
         self._repository.set_setting("main_splitter_sizes", clean_value)
+
+    def _apply_capture_enabled(self, enabled: bool, *, notify: bool) -> None:
+        enabled = bool(enabled)
+        self._capture_enabled = enabled
+        self._repository.set_setting("capture_enabled", "1" if enabled else "0")
+        self._window.set_capture_enabled(enabled)
+        if notify:
+            if enabled:
+                self._window.show_info("已开启剪贴板监听。")
+            else:
+                self._window.show_info("已暂停剪贴板监听，新的复制内容不会再保存。")
+
+    def _on_capture_enabled_changed(self, enabled: bool) -> None:
+        self._apply_capture_enabled(enabled, notify=True)
+
+    def _on_capture_hotkey_pressed(self) -> None:
+        self._apply_capture_enabled(not self._capture_enabled, notify=True)
+
+    def _collect_data_stats(self) -> dict:
+        stats = self._repository.stats()
+        stats["data_dir"] = str(self._repository.db_path.parent)
+        return stats
+
+    def _on_clear_all_data(self) -> None:
+        ok = self._window.confirm(
+            "清空所有数据",
+            "确认删除所有标签页中的全部条目吗？此操作不可恢复，标签页会保留。",
+        )
+        if not ok:
+            return
+        try:
+            self._repository.clear_all_items()
+        except Exception as exc:
+            self._window.show_error(f"清空数据失败：{exc}")
+            return
+        self._clear_rich_prewarm()
+        self._items_cache.clear()
+        self._refresh_tabs()
+        self._window.show_info("已清空所有条目。")
+        self._window.refresh_settings_data_stats()
 
     def _on_autostart_change_requested(self, enabled: bool) -> None:
         error = self._autostart_service.set_enabled(enabled)
@@ -880,6 +940,8 @@ class AppController:
         self._pending_focus_target = None
 
     def _on_clipboard_parsed_captured(self, parsed: ParsedClipboardItem) -> None:
+        if not self._capture_enabled:
+            return
         logger.info(
             "[Capture] parsed type=%s formats=%s sizes=%s",
             parsed.item_type,
@@ -1096,6 +1158,30 @@ class AppController:
             messages.append(
                 "诊断日志已开启" if diagnostic_logging else "诊断日志已关闭"
             )
+
+        capture_enabled = bool(getattr(payload, "capture_enabled", True))
+        if capture_enabled != self._capture_enabled:
+            self._apply_capture_enabled(capture_enabled, notify=False)
+            messages.append(
+                "已开启剪贴板监听" if capture_enabled else "已暂停剪贴板监听"
+            )
+
+        toggle_hotkey = getattr(payload, "capture_toggle_hotkey", "") or ""
+        if toggle_hotkey and toggle_hotkey != self._capture_hotkey_service.hotkey_text:
+            normalized, error = HotkeyService.normalize_hotkey(toggle_hotkey)
+            if error:
+                errors.append(f"暂停/恢复快捷键无效：{error}（未修改）")
+            else:
+                ok, start_error = self._capture_hotkey_service.update_hotkey(normalized)
+                if ok:
+                    self._capture_toggle_hotkey_text = normalized
+                    self._repository.set_setting("capture_toggle_hotkey", normalized)
+                    self._window.set_capture_toggle_hotkey_text(normalized)
+                    messages.append(f"暂停/恢复快捷键已更新为 {normalized}")
+                else:
+                    errors.append(
+                        f"暂停/恢复快捷键注册失败：{start_error or '未知错误'}（未修改）"
+                    )
 
         self._on_appearance_change_requested(payload.appearance)
 

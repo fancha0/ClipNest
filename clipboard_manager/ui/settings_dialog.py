@@ -3,15 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Optional
 
-from PySide6.QtCore import QPointF, QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QColor, QDesktopServices, QIcon, QKeySequence, QPainter, QPen, QPixmap
+from PySide6.QtCore import QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QDesktopServices, QIcon, QKeySequence
 from PySide6.QtWidgets import (
-    QColorDialog,
+    QApplication,
     QComboBox,
     QDialogButtonBox,
     QHBoxLayout,
     QKeySequenceEdit,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QPushButton,
@@ -26,15 +27,29 @@ from .theme import (
     AppearanceSettings,
     ACCENT_COLOR_LABELS,
     GLASS_STRENGTH_LABELS,
+    THEME_MODES,
     THEME_STYLE_LABELS,
+    build_theme_tokens_from_appearance,
     current_theme_tokens,
     default_appearance_settings,
     normalize_theme_mode,
+    theme_style_colors,
 )
 from .dialog_base import ResizableDialog
-from .settings_widgets import ColorPickButton, SettingRow, SettingsSection, ToggleSwitch
+from .icons import line_icon
+from .settings_widgets import (
+    AppearancePreview,
+    ColorPickButton,
+    NotePreview,
+    SegmentedControl,
+    SettingRow,
+    SettingsSection,
+    ThemeStyleSelector,
+    ToggleSwitch,
+    pick_color,
+)
 from ..version import APP_VERSION
-from ..config import log_file_path
+from ..config import app_data_dir, default_hotkey, log_file_path
 
 PRESET_COLORS = {
     "简约白": ("#f6f9ff", "#ffffff", "#8fc1f3"),
@@ -70,53 +85,9 @@ NAV_PAGES = (
 )
 
 
-def _create_nav_icon(kind: str, dark: bool) -> QIcon:
-    """Hand-drawn 16x16 line icons so the nav renders consistently everywhere."""
-    pixmap = QPixmap(16, 16)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-    color = QColor("#9fb0c6") if dark else QColor("#5a6a7e")
-    pen = QPen(color)
-    pen.setWidthF(1.6)
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    painter.setPen(pen)
-    painter.setBrush(Qt.BrushStyle.NoBrush)
-
-    if kind == "general":
-        painter.drawEllipse(4.5, 4.5, 7, 7)
-        painter.drawEllipse(6.9, 6.9, 2.2, 2.2)
-        painter.drawLine(8.0, 1.5, 8.0, 3.0)
-        painter.drawLine(8.0, 13.0, 8.0, 14.5)
-        painter.drawLine(1.5, 8.0, 3.0, 8.0)
-        painter.drawLine(13.0, 8.0, 14.5, 8.0)
-        painter.drawLine(3.6, 3.6, 4.6, 4.6)
-        painter.drawLine(11.4, 11.4, 12.4, 12.4)
-        painter.drawLine(3.6, 12.4, 4.6, 11.4)
-        painter.drawLine(11.4, 4.6, 12.4, 3.6)
-    elif kind == "appearance":
-        painter.drawEllipse(3.0, 3.0, 10, 10)
-        painter.setBrush(color)
-        painter.drawEllipse(QPointF(5.8, 6.2), 1.0, 1.0)
-        painter.drawEllipse(QPointF(9.8, 6.6), 1.0, 1.0)
-        painter.drawEllipse(QPointF(7.2, 10.2), 1.0, 1.0)
-    elif kind == "note":
-        painter.drawEllipse(4.0, 3.5, 4.5, 4.5)
-        painter.drawEllipse(5.4, 4.9, 1.7, 1.7)
-        painter.drawLine(8.3, 7.8, 12.3, 11.8)
-        painter.drawLine(10.6, 9.4, 12.6, 7.4)
-    elif kind == "data":
-        painter.drawRoundedRect(2.5, 3.5, 11, 9, 2.0, 2.0)
-        painter.drawLine(5.0, 6.0, 8.0, 6.0)
-        painter.drawEllipse(9.6, 8.4, 2.0, 2.0)
-    else:
-        painter.drawEllipse(2.5, 2.5, 11, 11)
-        painter.setBrush(color)
-        painter.drawEllipse(QPointF(8.0, 5.4), 1.0, 1.0)
-        painter.drawLine(8.0, 8.0, 8.0, 11.2)
-
-    painter.end()
-    return QIcon(pixmap)
+def _create_nav_icon(kind: str, color: str) -> QIcon:
+    """Line icons for the settings nav, drawn consistently with the app icon set."""
+    return line_icon(f"nav_{kind}", color, 18)
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +104,9 @@ class SettingsPayload:
     apply_only: bool = False
     auto_check_update: bool = True
     diagnostic_logging: bool = True
+    capture_enabled: bool = True
+    capture_toggle_hotkey: str = "Ctrl+Shift+P"
+
 
 
 class SettingsDialog(ResizableDialog):
@@ -142,6 +116,7 @@ class SettingsDialog(ResizableDialog):
 
     apply_requested = Signal(object)
     check_update_requested = Signal()
+    clear_data_requested = Signal()
 
     def __init__(
         self,
@@ -159,6 +134,9 @@ class SettingsDialog(ResizableDialog):
         tabs: list[tuple[int, str]],
         auto_check_update: bool = True,
         diagnostic_logging: bool = True,
+        capture_enabled: bool = True,
+        capture_toggle_hotkey: str = "Ctrl+Shift+P",
+        data_stats: Optional[dict] = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("设置")
@@ -175,6 +153,9 @@ class SettingsDialog(ResizableDialog):
         self._theme_mode_initial = normalize_theme_mode(theme_mode)
         self._auto_check_update_initial = bool(auto_check_update)
         self._diagnostic_logging_initial = bool(diagnostic_logging)
+        self._capture_enabled_initial = bool(capture_enabled)
+        self._capture_toggle_hotkey_initial = str(capture_toggle_hotkey or "Ctrl+Shift+P")
+        self._data_stats = dict(data_stats or {})
         self._export_requested = False
         self._import_requested = False
 
@@ -195,14 +176,14 @@ class SettingsDialog(ResizableDialog):
         self.nav_list.setObjectName("settingsNav")
         self.nav_list.setFixedWidth(168)
         self.nav_list.setSpacing(2)
-        self.nav_list.setIconSize(QSize(16, 16))
+        self.nav_list.setIconSize(QSize(17, 17))
         self.nav_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        dark = bool(getattr(current_theme_tokens(), "is_dark", False))
         for label, kind in NAV_PAGES:
             item = QListWidgetItem(label)
-            item.setIcon(_create_nav_icon(kind, dark))
+            item.setData(Qt.ItemDataRole.UserRole, kind)
             item.setSizeHint(QSize(0, 38))
             self.nav_list.addItem(item)
+        self.nav_list.currentRowChanged.connect(self._refresh_nav_icons)
         body.addWidget(self.nav_list)
 
         self.pages = QStackedWidget(self)
@@ -212,7 +193,24 @@ class SettingsDialog(ResizableDialog):
         self.pages.addWidget(self._wrap_scroll(self._build_note_page()))
         self.pages.addWidget(self._wrap_scroll(self._build_data_page()))
         self.pages.addWidget(self._wrap_scroll(self._build_about_page()))
-        body.addWidget(self.pages, 1)
+
+        right_column = QWidget(self)
+        right_layout = QVBoxLayout(right_column)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(0)
+        search_wrap = QWidget(right_column)
+        search_wrap_layout = QHBoxLayout(search_wrap)
+        search_wrap_layout.setContentsMargins(20, 14, 20, 6)
+        search_wrap_layout.setSpacing(0)
+        self.settings_search = QLineEdit(search_wrap)
+        self.settings_search.setObjectName("settingsSearchInput")
+        self.settings_search.setPlaceholderText("搜索设置项…")
+        self.settings_search.setClearButtonEnabled(True)
+        self.settings_search.textChanged.connect(self._apply_settings_filter)
+        search_wrap_layout.addWidget(self.settings_search)
+        right_layout.addWidget(search_wrap)
+        right_layout.addWidget(self.pages, 1)
+        body.addWidget(right_column, 1)
         root.addLayout(body, 1)
 
         footer = QWidget(self)
@@ -279,6 +277,17 @@ class SettingsDialog(ResizableDialog):
         layout.addLayout(header_box)
         return page, layout
 
+    def _refresh_nav_icons(self, current_row: int = -1) -> None:
+        tokens = current_theme_tokens()
+        accent = tokens.accent_bg
+        secondary = tokens.text_secondary
+        for idx in range(self.nav_list.count()):
+            item = self.nav_list.item(idx)
+            kind = str(item.data(Qt.ItemDataRole.UserRole) or "")
+            if not kind:
+                continue
+            item.setIcon(_create_nav_icon(kind, accent if idx == current_row else secondary))
+
     # ---------- pages ----------
 
     def _build_general_page(self) -> QWidget:
@@ -289,6 +298,15 @@ class SettingsDialog(ResizableDialog):
         self.hotkey_edit.setFixedWidth(190)
         if self._hotkey_initial:
             self.hotkey_edit.setKeySequence(QKeySequence(_to_qt_hotkey_text(self._hotkey_initial)))
+
+        hotkey_reset_btn = QPushButton("恢复默认", page)
+        hotkey_reset_btn.clicked.connect(self._reset_hotkey_to_default)
+        hotkey_widget = QWidget(page)
+        hotkey_layout = QHBoxLayout(hotkey_widget)
+        hotkey_layout.setContentsMargins(0, 0, 0, 0)
+        hotkey_layout.setSpacing(6)
+        hotkey_layout.addWidget(self.hotkey_edit)
+        hotkey_layout.addWidget(hotkey_reset_btn)
 
         self.capture_tab_combo = QComboBox(page)
         self.capture_tab_combo.setFixedWidth(190)
@@ -303,17 +321,44 @@ class SettingsDialog(ResizableDialog):
         self.capture_max_spin.setRange(50, 5000)
         self.capture_max_spin.setSingleStep(50)
         self.capture_max_spin.setFixedWidth(120)
+        self.capture_max_spin.setSuffix(" 条")
         self.capture_max_spin.setValue(int(self._capture_max_initial))
 
         self.autostart_chk = ToggleSwitch(page)
         self.autostart_chk.setChecked(bool(self._autostart_initial))
 
+        self.capture_toggle_hotkey_edit = QKeySequenceEdit(page)
+        self.capture_toggle_hotkey_edit.setMaximumSequenceLength(1)
+        self.capture_toggle_hotkey_edit.setFixedWidth(190)
+        if self._capture_toggle_hotkey_initial:
+            self.capture_toggle_hotkey_edit.setKeySequence(
+                QKeySequence(_to_qt_hotkey_text(self._capture_toggle_hotkey_initial))
+            )
+
+        self.capture_toggle_hotkey_reset_btn = QPushButton("恢复默认", page)
+        self.capture_toggle_hotkey_reset_btn.clicked.connect(
+            self._reset_capture_toggle_hotkey
+        )
+        toggle_hotkey_widget = QWidget(page)
+        toggle_hotkey_layout = QHBoxLayout(toggle_hotkey_widget)
+        toggle_hotkey_layout.setContentsMargins(0, 0, 0, 0)
+        toggle_hotkey_layout.setSpacing(6)
+        toggle_hotkey_layout.addWidget(self.capture_toggle_hotkey_edit)
+        toggle_hotkey_layout.addWidget(self.capture_toggle_hotkey_reset_btn)
+
         section = SettingsSection("快捷键与启动", page)
         section.add_row(
             SettingRow(
                 "全局快捷键",
-                self.hotkey_edit,
-                "至少一个修饰键加一个主键，例如 Ctrl+Shift+V。",
+                hotkey_widget,
+                "打开面板的快捷键，至少一个修饰键加一个主键，例如 Ctrl+Shift+V。",
+            )
+        )
+        section.add_row(
+            SettingRow(
+                "暂停/恢复监听快捷键",
+                toggle_hotkey_widget,
+                "一键暂停或恢复自动记录剪贴板，默认 Ctrl+Shift+P。",
             )
         )
         section.add_row(
@@ -326,6 +371,15 @@ class SettingsDialog(ResizableDialog):
         layout.addWidget(section)
 
         capture_section = SettingsSection("剪贴板监听", page)
+        self.capture_enabled_chk = ToggleSwitch(page)
+        self.capture_enabled_chk.setChecked(bool(self._capture_enabled_initial))
+        capture_section.add_row(
+            SettingRow(
+                "自动记录剪贴板",
+                self.capture_enabled_chk,
+                "关闭后停止把新的复制内容保存到标签页，可随时重新开启。",
+            )
+        )
         capture_section.add_row(
             SettingRow(
                 "监听存储标签",
@@ -341,45 +395,80 @@ class SettingsDialog(ResizableDialog):
             )
         )
         layout.addWidget(capture_section)
+
+        self.shortcut_overview_section = SettingsSection("快捷键一览", page)
+        self._populate_shortcuts()
+        layout.addWidget(self.shortcut_overview_section)
         layout.addStretch(1)
         return page
 
+    def _shortcut_rows(self) -> list[tuple[str, str]]:
+        open_panel = self.hotkey_edit.keySequence().toString(
+            QKeySequence.SequenceFormat.PortableText
+        ) or "未设置"
+        toggle = self.capture_toggle_hotkey_edit.keySequence().toString(
+            QKeySequence.SequenceFormat.PortableText
+        ) or "未设置"
+        return [
+            ("打开面板", open_panel),
+            ("暂停/恢复监听", toggle),
+            ("搜索条目", "Ctrl + F"),
+            ("新建条目", "Ctrl + N"),
+            ("粘贴选中条目", "Enter"),
+            ("快速粘贴第 1–9 条", "1 – 9"),
+        ]
+
+    def _populate_shortcuts(self) -> None:
+        section = self.shortcut_overview_section
+        for name, keys in self._shortcut_rows():
+            value = QLabel(keys, section)
+            value.setObjectName("shortcutKeyLabel")
+            section.add_row(SettingRow(name, value))
+
+
+
     def _build_appearance_page(self) -> QWidget:
-        page, layout = self._new_page("外观", "主题模式、配色与显示效果")
+        page, layout = self._new_page("外观", "主题、配色与显示效果")
 
-        self.theme_mode_combo = QComboBox(page)
-        self.theme_mode_combo.setFixedWidth(150)
-        for mode_key, mode_label in THEME_MODE_LABELS.items():
-            self.theme_mode_combo.addItem(mode_label, mode_key)
-        mode_index = self.theme_mode_combo.findData(self._theme_mode_initial)
-        if mode_index >= 0:
-            self.theme_mode_combo.setCurrentIndex(mode_index)
+        self.theme_mode_segment = SegmentedControl(
+            [(mode_key, THEME_MODE_LABELS[mode_key]) for mode_key in THEME_MODES],
+            page,
+        )
+        self.theme_mode_segment.set_current(self._theme_mode_initial)
+        self.theme_mode_segment.valueChanged.connect(lambda _=None: self._refresh_preview())
 
-        theme_section = SettingsSection("主题", page)
-        theme_section.add_row(
+        mode_section = SettingsSection("主题", page)
+        mode_section.add_row(
             SettingRow(
                 "主题模式",
-                self.theme_mode_combo,
+                self.theme_mode_segment,
                 "跟随系统时会随 Windows 深浅色自动切换。",
             )
         )
-        layout.addWidget(theme_section)
+        layout.addWidget(mode_section)
 
-        self.theme_style_combo = QComboBox(page)
-        self.theme_style_combo.setFixedWidth(150)
-        for style_key, style_label in THEME_STYLE_LABELS.items():
-            self.theme_style_combo.addItem(style_label, style_key)
-        style_index = self.theme_style_combo.findData(self._appearance.theme_style)
-        if style_index >= 0:
-            self.theme_style_combo.setCurrentIndex(style_index)
+        self.theme_style_selector = ThemeStyleSelector(
+            [(style_key, style_label) for style_key, style_label in THEME_STYLE_LABELS.items()],
+            page,
+        )
+        self.theme_style_selector.set_current(self._appearance.theme_style)
+        self.theme_style_selector.styleSelected.connect(self._on_theme_style_selected)
 
-        self.glass_strength_combo = QComboBox(page)
-        self.glass_strength_combo.setFixedWidth(150)
-        for strength_key, strength_label in GLASS_STRENGTH_LABELS.items():
-            self.glass_strength_combo.addItem(strength_label, strength_key)
-        strength_index = self.glass_strength_combo.findData(self._appearance.glass_strength)
-        if strength_index >= 0:
-            self.glass_strength_combo.setCurrentIndex(strength_index)
+        style_section = SettingsSection("主题风格", page)
+        style_section.add_widget(self.theme_style_selector)
+        layout.addWidget(style_section)
+
+        self.preview = AppearancePreview(page)
+        preview_section = SettingsSection("预览", page)
+        preview_section.add_widget(self.preview)
+        layout.addWidget(preview_section)
+
+        self.glass_strength_segment = SegmentedControl(
+            [(key, GLASS_STRENGTH_LABELS[key]) for key in ("standard", "glass", "transparent")],
+            page,
+        )
+        self.glass_strength_segment.set_current(self._appearance.glass_strength)
+        self.glass_strength_segment.valueChanged.connect(lambda _=None: self._refresh_preview())
 
         self.accent_color_combo = QComboBox(page)
         self.accent_color_combo.setFixedWidth(150)
@@ -388,30 +477,24 @@ class SettingsDialog(ResizableDialog):
         accent_index = self.accent_color_combo.findData(self._appearance.accent_color)
         if accent_index >= 0:
             self.accent_color_combo.setCurrentIndex(accent_index)
+        self.accent_color_combo.currentIndexChanged.connect(lambda _=None: self._refresh_preview())
 
-        theme_style_section = SettingsSection("主题风格", page)
-        theme_style_section.add_row(
-            SettingRow(
-                "风格",
-                self.theme_style_combo,
-                "选择整体配色风格；深色模式下会切换到石墨夜玻璃配色。",
-            )
-        )
-        theme_style_section.add_row(
+        style_options = SettingsSection("玻璃与强调色", page)
+        style_options.add_row(
             SettingRow(
                 "玻璃强度",
-                self.glass_strength_combo,
+                self.glass_strength_segment,
                 "影响导航、条目和搜索框的透明程度。",
             )
         )
-        theme_style_section.add_row(
+        style_options.add_row(
             SettingRow(
                 "强调色",
                 self.accent_color_combo,
-                "影响按钮、选中态、导航竖条和焦点颜色。",
+                "影响按钮、选中态、导航竖条、开关和焦点颜色。",
             )
         )
-        layout.addWidget(theme_style_section)
+        layout.addWidget(style_options)
 
         self.font_size_spin = QSpinBox(page)
         self.font_size_spin.setRange(10, 28)
@@ -427,23 +510,7 @@ class SettingsDialog(ResizableDialog):
             lambda: self._pick_appearance_color("item_selected_bg")
         )
 
-        preset_widget = QWidget(page)
-        preset_layout = QHBoxLayout(preset_widget)
-        preset_layout.setContentsMargins(0, 0, 0, 0)
-        preset_layout.setSpacing(6)
-        for preset_name in PRESET_COLORS:
-            btn = QPushButton(preset_name, preset_widget)
-            btn.clicked.connect(lambda _=False, name=preset_name: self._apply_preset(name))
-            preset_layout.addWidget(btn)
-
-        color_section = SettingsSection("配色", page)
-        color_section.add_row(
-            SettingRow(
-                "预设配色",
-                preset_widget,
-                "一键套用推荐配色；「石墨夜」为深色主题，仅在浅色模式下生效。",
-            )
-        )
+        color_section = SettingsSection("自定义颜色", page)
         color_section.add_row(SettingRow("窗口背景", self.window_bg_btn))
         color_section.add_row(SettingRow("条目背景", self.item_bg_btn))
         color_section.add_row(SettingRow("选中条目背景", self.item_selected_bg_btn))
@@ -466,6 +533,7 @@ class SettingsDialog(ResizableDialog):
         display_section.add_row(SettingRow("恢复默认外观", reset_btn))
         layout.addWidget(display_section)
         layout.addStretch(1)
+        self._refresh_preview()
         return page
 
     def _build_note_page(self) -> QWidget:
@@ -477,10 +545,17 @@ class SettingsDialog(ResizableDialog):
         self.note_font_spin = QSpinBox(page)
         self.note_font_spin.setRange(10, 28)
         self.note_font_spin.setFixedWidth(120)
+        self.note_font_spin.setSuffix(" px")
         self.note_font_spin.setValue(int(self._note_font_size_initial))
+        self.note_font_spin.valueChanged.connect(lambda _=None: self._refresh_note_preview())
 
         self.pinned_color_btn = ColorPickButton(self._pinned_color, page)
         self.pinned_color_btn.clicked.connect(self._pick_pinned_color)
+
+        self.note_preview = NotePreview(page)
+        preview_section = SettingsSection("预览", page)
+        preview_section.add_widget(self.note_preview)
+        layout.addWidget(preview_section)
 
         note_section = SettingsSection("备注样式", page)
         note_section.add_row(
@@ -489,16 +564,70 @@ class SettingsDialog(ResizableDialog):
         note_section.add_row(SettingRow("备注文字大小", self.note_font_spin))
         layout.addWidget(note_section)
 
+        pinned_presets = QWidget(page)
+        pinned_presets_layout = QHBoxLayout(pinned_presets)
+        pinned_presets_layout.setContentsMargins(0, 0, 0, 0)
+        pinned_presets_layout.setSpacing(6)
+        for color_hex in ("#1fb8cb", "#1677c8", "#4f9d69", "#d97706", "#8b5cf6", "#d0534b"):
+            swatch = QPushButton(pinned_presets)
+            swatch.setFixedSize(QSize(26, 26))
+            swatch.setCursor(Qt.CursorShape.PointingHandCursor)
+            swatch.setToolTip(color_hex.upper())
+            swatch.setStyleSheet(
+                f"QPushButton {{ background: {color_hex}; border: 1px solid rgba(0,0,0,40);"
+                f" border-radius: 7px; }}"
+            )
+            swatch.clicked.connect(
+                lambda _=False, c=color_hex: self._set_pinned_color(c)
+            )
+            pinned_presets_layout.addWidget(swatch)
+
         pinned_section = SettingsSection("置顶标记", page)
         pinned_section.add_row(
             SettingRow("置顶强调色", self.pinned_color_btn, "用于置顶条目的左侧色条与描边。")
         )
+        pinned_section.add_row(SettingRow("快速选择", pinned_presets))
         layout.addWidget(pinned_section)
         layout.addStretch(1)
+        self._refresh_note_preview()
         return page
 
+    def _set_pinned_color(self, color_hex: str) -> None:
+        self._pinned_color = color_hex
+        self.pinned_color_btn.set_color(color_hex)
+        self._refresh_note_preview()
+
+    def _refresh_note_preview(self) -> None:
+        preview = getattr(self, "note_preview", None)
+        if preview is None:
+            return
+        preview.set_style(
+            self._note_color,
+            int(self.note_font_spin.value()),
+            self._pinned_color,
+        )
+
     def _build_data_page(self) -> QWidget:
-        page, layout = self._new_page("数据", "备份与迁移")
+        page, layout = self._new_page("数据", "备份、迁移与数据管理")
+
+        self.data_tabs_label = QLabel("—", page)
+        self.data_items_label = QLabel("—", page)
+        self.data_images_label = QLabel("—", page)
+        self.data_size_label = QLabel("—", page)
+        for label in (
+            self.data_tabs_label,
+            self.data_items_label,
+            self.data_images_label,
+            self.data_size_label,
+        ):
+            label.setObjectName("shortcutKeyLabel")
+
+        stats_section = SettingsSection("数据统计", page)
+        stats_section.add_row(SettingRow("标签页数量", self.data_tabs_label))
+        stats_section.add_row(SettingRow("条目总数", self.data_items_label))
+        stats_section.add_row(SettingRow("图片条目", self.data_images_label))
+        stats_section.add_row(SettingRow("数据库占用", self.data_size_label))
+        layout.addWidget(stats_section)
 
         export_btn = QPushButton("导出…", page)
         export_btn.clicked.connect(self._request_export)
@@ -522,15 +651,60 @@ class SettingsDialog(ResizableDialog):
         )
         layout.addWidget(section)
 
-        hint = QLabel("选择导入或导出后，设置窗口会先关闭再打开文件选择。", page)
-        hint.setObjectName("settingRowDescription")
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
+        open_dir_btn = QPushButton("打开数据目录", page)
+        open_dir_btn.clicked.connect(self._open_data_dir)
+        clear_btn = QPushButton("清空所有条目", page)
+        clear_btn.setObjectName("dangerButton")
+        clear_btn.clicked.connect(self.clear_data_requested.emit)
+
+        manage_section = SettingsSection("数据管理", page)
+        manage_section.add_row(
+            SettingRow("数据目录", open_dir_btn, "打开存放数据库与日志的文件夹。")
+        )
+        manage_section.add_row(
+            SettingRow(
+                "清空所有条目",
+                clear_btn,
+                "删除全部标签页中的条目，标签页会保留。",
+            )
+        )
+        layout.addWidget(manage_section)
+
+        self._apply_data_stats()
         layout.addStretch(1)
         return page
 
+    def _open_data_dir(self) -> None:
+        target = app_data_dir()
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(target)))
+
+    @staticmethod
+    def _format_size(num_bytes: int) -> str:
+        size = float(max(0, int(num_bytes)))
+        for unit in ("B", "KB", "MB", "GB"):
+            if size < 1024.0 or unit == "GB":
+                if unit == "B":
+                    return f"{int(size)} {unit}"
+                return f"{size:.1f} {unit}"
+            size /= 1024.0
+        return f"{size:.1f} GB"
+
+    def _apply_data_stats(self) -> None:
+        stats = self._data_stats or {}
+        self.data_tabs_label.setText(str(stats.get("tabs", "—")))
+        self.data_items_label.setText(str(stats.get("items", "—")))
+        self.data_images_label.setText(str(stats.get("images", "—")))
+        db_bytes = stats.get("db_bytes")
+        self.data_size_label.setText(
+            self._format_size(db_bytes) if db_bytes is not None else "—"
+        )
+
+    def set_data_stats(self, stats: Optional[dict]) -> None:
+        self._data_stats = dict(stats or {})
+        self._apply_data_stats()
+
     def _build_about_page(self) -> QWidget:
-        page, layout = self._new_page("关于", "版本信息与软件更新")
+        page, layout = self._new_page("关于", "版本信息、更新与诊断日志")
 
         header = QHBoxLayout()
         icon_label = QLabel(page)
@@ -538,12 +712,20 @@ class SettingsDialog(ResizableDialog):
         if not window_icon.isNull():
             icon_label.setPixmap(window_icon.pixmap(44, 44))
         header.addWidget(icon_label)
+        name_column = QVBoxLayout()
+        name_column.setContentsMargins(0, 0, 0, 0)
+        name_column.setSpacing(2)
         name_label = QLabel("ClipNest", page)
         name_label.setObjectName("aboutAppName")
-        header.addWidget(name_label)
+        name_column.addWidget(name_label)
+        self.current_version_label = QLabel(f"当前版本 v{APP_VERSION}", page)
+        self.current_version_label.setObjectName("settingRowDescription")
+        name_column.addWidget(self.current_version_label)
+        header.addLayout(name_column)
         header.addStretch(1)
         layout.addLayout(header)
 
+        self.latest_version_label = QLabel("最新版本：未知（点击检查更新）", page)
         repo_link = QLabel(
             '<a href="https://github.com/fancha0/ClipNest">github.com/fancha0/ClipNest</a>',
             page,
@@ -553,21 +735,39 @@ class SettingsDialog(ResizableDialog):
         repo_link.linkActivated.connect(
             lambda url: QDesktopServices.openUrl(QUrl(url))
         )
-        layout.addWidget(repo_link)
+        copy_btn = QPushButton("复制版本信息", page)
+        copy_btn.clicked.connect(self._copy_version_info)
 
-        self.current_version_label = QLabel(f"当前版本 v{APP_VERSION}", page)
-        layout.addWidget(self.current_version_label)
-
-        self.latest_version_label = QLabel("最新版本：未知（点击检查更新）", page)
-        self.latest_version_label.setObjectName("aboutLatestVersion")
-        layout.addWidget(self.latest_version_label)
+        info_section = SettingsSection("版本信息", page)
+        info_section.add_row(SettingRow("最新版本", self.latest_version_label))
+        info_section.add_row(SettingRow("仓库地址", repo_link))
+        info_section.add_row(
+            SettingRow("复制版本信息", copy_btn, "复制版本号与系统信息，便于反馈问题。")
+        )
+        layout.addWidget(info_section)
 
         self.check_update_btn = QPushButton("检查更新", page)
-        self.check_update_btn.setFixedWidth(120)
         self.check_update_btn.clicked.connect(self._on_check_update_clicked)
 
         self.auto_update_chk = ToggleSwitch(page)
         self.auto_update_chk.setChecked(self._auto_check_update_initial)
+
+        update_section = SettingsSection("更新", page)
+        update_section.add_row(
+            SettingRow(
+                "检查更新",
+                self.check_update_btn,
+                "从更新服务器获取最新版本并自动安装。",
+            )
+        )
+        update_section.add_row(
+            SettingRow(
+                "启动时自动检查",
+                self.auto_update_chk,
+                "启动后自动静默检查，发现新版本时弹出更新窗口。",
+            )
+        )
+        layout.addWidget(update_section)
 
         self.diagnostic_logging_chk = ToggleSwitch(page)
         self.diagnostic_logging_chk.setChecked(self._diagnostic_logging_initial)
@@ -582,38 +782,43 @@ class SettingsDialog(ResizableDialog):
         log_actions_layout.addWidget(self.open_log_btn)
         log_actions_layout.addWidget(self.clear_log_btn)
 
-        section = SettingsSection("软件更新", page)
-        section.add_row(
+        self.log_info_label = QLabel("", page)
+        self.log_info_label.setObjectName("settingRowDescription")
+        self.log_info_label.setWordWrap(True)
+        self._refresh_log_info()
+
+        log_section = SettingsSection("诊断日志", page)
+        log_section.add_row(
             SettingRow(
-                "检查更新",
-                self.check_update_btn,
-                "从更新服务器获取最新版本并自动安装。",
-            )
-        )
-        section.add_row(
-            SettingRow(
-                "启动时自动检查",
-                self.auto_update_chk,
-                "启动后自动静默检查，发现新版本时弹出更新窗口。",
-            )
-        )
-        section.add_row(
-            SettingRow(
-                "诊断日志",
+                "记录诊断日志",
                 self.diagnostic_logging_chk,
-                "遇到问题时开启；日志位于当前用户数据目录。",
+                "遇到问题时开启，可帮助定位剪贴板抓取/粘贴异常。",
             )
         )
-        section.add_row(
-            SettingRow(
-                "日志操作",
-                log_actions,
-                str(log_file_path()),
-            )
-        )
-        layout.addWidget(section)
+        log_section.add_row(SettingRow("日志操作", log_actions))
+        log_section.add_row(SettingRow("日志文件", self.log_info_label))
+        layout.addWidget(log_section)
         layout.addStretch(1)
         return page
+
+    def _refresh_log_info(self) -> None:
+        path = log_file_path()
+        try:
+            size = path.stat().st_size if path.exists() else 0
+            self.log_info_label.setText(f"{path}\n占用 {self._format_size(size)}")
+        except OSError:
+            self.log_info_label.setText(str(path))
+
+    def _copy_version_info(self) -> None:
+        import platform
+
+        text = (
+            f"ClipNest v{APP_VERSION}\n"
+            f"系统：{platform.system()} {platform.release()}\n"
+            f"Python：{platform.python_version()}"
+        )
+        QApplication.clipboard().setText(text)
+        self.set_apply_feedback("已复制版本信息")
 
     def _open_log_file(self) -> None:
         path = log_file_path()
@@ -624,6 +829,7 @@ class SettingsDialog(ResizableDialog):
     def _clear_log_file(self) -> None:
         try:
             log_file_path().write_text("", encoding="utf-8")
+            self._refresh_log_info()
             self.set_apply_feedback("诊断日志已清空")
         except OSError as exc:
             self.set_apply_feedback(f"清空日志失败：{exc}")
@@ -644,38 +850,41 @@ class SettingsDialog(ResizableDialog):
 
     def _pick_appearance_color(self, key: str) -> None:
         current = getattr(self._appearance, key)
-        color = QColorDialog.getColor(QColor(current), self, "选择颜色")
-        if not color.isValid():
+        chosen = pick_color(self, "选择颜色", current)
+        if not chosen:
             return
-        self._appearance = replace(self._appearance, **{key: color.name()})
+        self._appearance = replace(self._appearance, **{key: chosen})
         button = {
             "window_bg": self.window_bg_btn,
             "item_bg": self.item_bg_btn,
             "item_selected_bg": self.item_selected_bg_btn,
         }[key]
-        button.set_color(color.name())
+        button.set_color(chosen)
+        self._refresh_preview()
 
     def _pick_note_color(self) -> None:
-        color = QColorDialog.getColor(QColor(self._note_color), self, "选择备注文字颜色")
-        if not color.isValid():
+        chosen = pick_color(self, "选择备注文字颜色", self._note_color)
+        if not chosen:
             return
-        self._note_color = color.name()
+        self._note_color = chosen
         self.note_color_btn.set_color(self._note_color)
+        self._refresh_note_preview()
 
     def _pick_pinned_color(self) -> None:
-        color = QColorDialog.getColor(QColor(self._pinned_color), self, "选择置顶颜色")
-        if not color.isValid():
+        chosen = pick_color(self, "选择置顶颜色", self._pinned_color)
+        if not chosen:
             return
-        self._pinned_color = color.name()
+        self._pinned_color = chosen
         self.pinned_color_btn.set_color(self._pinned_color)
+        self._refresh_note_preview()
 
-    def _apply_preset(self, preset_name: str) -> None:
-        colors = PRESET_COLORS.get(preset_name)
-        if colors is None:
+    def _on_theme_style_selected(self, style: str) -> None:
+        if not style:
             return
-        window_bg, item_bg, item_selected_bg = colors
+        window_bg, item_bg, item_selected_bg = theme_style_colors(style)
         self._appearance = replace(
             self._appearance,
+            theme_style=style,
             window_bg=window_bg,
             item_bg=item_bg,
             item_selected_bg=item_selected_bg,
@@ -683,6 +892,24 @@ class SettingsDialog(ResizableDialog):
         self.window_bg_btn.set_color(window_bg)
         self.item_bg_btn.set_color(item_bg)
         self.item_selected_bg_btn.set_color(item_selected_bg)
+        self._refresh_preview()
+
+    def _refresh_preview(self) -> None:
+        preview = getattr(self, "preview", None)
+        if preview is None:
+            return
+        accent = self.accent_color_combo.currentData() if hasattr(self, "accent_color_combo") else None
+        candidate = replace(
+            self._appearance,
+            accent_color=str(accent or self._appearance.accent_color),
+        )
+        tokens = build_theme_tokens_from_appearance(candidate)
+        preview.set_colors(
+            tokens.main_window_bg,
+            tokens.item_bg,
+            tokens.item_selected_bg,
+            tokens.accent_bg,
+        )
 
     def _reset_appearance_defaults(self) -> None:
         self._appearance = default_appearance_settings()
@@ -692,14 +919,30 @@ class SettingsDialog(ResizableDialog):
         self.window_bg_btn.set_color(self._appearance.window_bg)
         self.item_bg_btn.set_color(self._appearance.item_bg)
         self.item_selected_bg_btn.set_color(self._appearance.item_selected_bg)
-        self.theme_style_combo.setCurrentIndex(self.theme_style_combo.findData(self._appearance.theme_style))
-        self.glass_strength_combo.setCurrentIndex(self.glass_strength_combo.findData(self._appearance.glass_strength))
-        self.accent_color_combo.setCurrentIndex(self.accent_color_combo.findData(self._appearance.accent_color))
+        self.theme_style_selector.set_current(self._appearance.theme_style)
+        self.glass_strength_segment.set_current(self._appearance.glass_strength)
+        self.accent_color_combo.setCurrentIndex(
+            self.accent_color_combo.findData(self._appearance.accent_color)
+        )
+        self._refresh_preview()
 
     # ---------- results ----------
 
     def _on_apply_clicked(self) -> None:
         self.apply_requested.emit(self.result_payload())
+
+    def _apply_settings_filter(self, text: str) -> None:
+        query = (text or "").strip()
+        for section in self.findChildren(SettingsSection):
+            section.apply_filter(query)
+
+    def _reset_hotkey_to_default(self) -> None:
+        self.hotkey_edit.setKeySequence(QKeySequence(_to_qt_hotkey_text(default_hotkey())))
+
+    def _reset_capture_toggle_hotkey(self) -> None:
+        self.capture_toggle_hotkey_edit.setKeySequence(
+            QKeySequence(_to_qt_hotkey_text("Ctrl+Shift+P"))
+        )
 
     def set_apply_feedback(self, text: str) -> None:
         self.apply_status_label.setText(text)
@@ -741,16 +984,21 @@ class SettingsDialog(ResizableDialog):
             appearance=replace(
                 self._appearance,
                 font_size=int(self.font_size_spin.value()),
-                theme_style=str(self.theme_style_combo.currentData() or self._appearance.theme_style),
-                glass_strength=str(self.glass_strength_combo.currentData() or self._appearance.glass_strength),
+                theme_style=str(self.theme_style_selector.current_style() or self._appearance.theme_style),
+                glass_strength=str(self.glass_strength_segment.current_key() or self._appearance.glass_strength),
                 accent_color=str(self.accent_color_combo.currentData() or self._appearance.accent_color),
             ),
             theme_mode=normalize_theme_mode(
-                str(self.theme_mode_combo.currentData() or "follow_system")
+                str(self.theme_mode_segment.current_key() or "follow_system")
             ),
             note_color=self._note_color,
             note_font_size=int(self.note_font_spin.value()),
             pinned_color=self._pinned_color,
             auto_check_update=bool(self.auto_update_chk.isChecked()),
             diagnostic_logging=bool(self.diagnostic_logging_chk.isChecked()),
+            capture_enabled=bool(self.capture_enabled_chk.isChecked()),
+            capture_toggle_hotkey=(
+                self.capture_toggle_hotkey_edit.keySequence()
+                .toString(QKeySequence.SequenceFormat.PortableText)
+            ),
         )

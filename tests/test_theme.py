@@ -95,6 +95,32 @@ class PresetTests(unittest.TestCase):
         self.assertFalse(tokens.is_dark)
         self.assertEqual(tokens.accent_color, "auto")
 
+    def test_custom_window_bg_overrides_style_preset(self) -> None:
+        from clipboard_manager.ui.theme import theme_style_colors
+
+        appearance = dataclasses.replace(
+            default_appearance_settings(),
+            theme_style="eye_green",
+            window_bg="#f5e6c8",
+            item_bg="#fffdf7",
+            item_selected_bg="#e8d3a8",
+        )
+        tokens = build_theme_tokens_from_appearance(appearance)
+        self.assertEqual(tokens.main_window_bg, "#f5e6c8")
+        self.assertEqual(tokens.item_bg, "#fffdf7")
+        self.assertNotEqual(
+            tokens.main_window_bg,
+            theme_style_colors("eye_green")[0],
+        )
+
+    def test_theme_style_colors_exposed(self) -> None:
+        from clipboard_manager.ui.theme import theme_style_colors
+
+        window_bg, item_bg, selected = theme_style_colors("graphite_night")
+        self.assertEqual(window_bg, "#1d2430")
+        self.assertEqual(item_bg, "#27303f")
+        self.assertEqual(selected, "#32445c")
+
 
 if __name__ == "__main__":
     unittest.main()

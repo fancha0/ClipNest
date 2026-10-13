@@ -114,38 +114,6 @@ def default_dark_appearance_settings() -> AppearanceSettings:
 
 
 
-@dataclass(frozen=True, slots=True)
-class ThemePalette:
-    window_bg: str
-    item_bg: str
-    item_selected_bg: str
-    theme_style: ThemeStyle
-    glass_strength: GlassStrength
-    accent_color: AccentColor
-
-
-def default_theme_palette() -> ThemePalette:
-    return ThemePalette(
-        window_bg="#e9f1ea",
-        item_bg="#ffffff",
-        item_selected_bg="#a9cdb4",
-        theme_style="eye_green",
-        glass_strength="glass",
-        accent_color="auto",
-    )
-
-
-def default_dark_theme_palette() -> ThemePalette:
-    return ThemePalette(
-        window_bg="#1d2430",
-        item_bg="#27303f",
-        item_selected_bg="#32445c",
-        theme_style="graphite_night",
-        glass_strength="glass",
-        accent_color="auto",
-    )
-
-
 def resolve_dark_mode(mode: ThemeMode, system_dark: bool) -> bool:
     if mode == "dark":
         return True
@@ -253,6 +221,10 @@ class ThemeTokens:
     glass_strength: GlassStrength = "glass"
     theme_style: ThemeStyle = "eye_green"
     accent_color: AccentColor = "auto"
+    accent_bg: str = "#1677c8"
+    accent_hover_bg: str = "#248bdc"
+    accent_pressed_bg: str = "#0f62aa"
+    accent_border: str = "#5ab7ed"
 
 
 def _clamp(value: int) -> int:
@@ -315,58 +287,19 @@ def _contrast_text(background: tuple[int, int, int]) -> str:
     return "#f5f8ff" if _luminance(background) < 145 else "#242a33"
 
 
-def _theme_palette_for_appearance(
-    appearance: AppearanceSettings,
-    is_dark_window: bool,
-) -> ThemePalette:
-    style = normalize_theme_style(appearance.theme_style)
-    dark = default_dark_theme_palette()
-    if is_dark_window and style != "graphite_night":
-        return dark
-    palettes: dict[ThemeStyle, ThemePalette] = {
-        "simple_white": ThemePalette(
-            window_bg="#f6f9ff",
-            item_bg="#ffffff",
-            item_selected_bg="#8fc1f3",
-            theme_style="simple_white",
-            glass_strength=normalize_glass_strength(appearance.glass_strength),
-            accent_color=normalize_accent_color(appearance.accent_color),
-        ),
-        "eye_green": ThemePalette(
-            window_bg="#e9f1ea",
-            item_bg="#ffffff",
-            item_selected_bg="#a9cdb4",
-            theme_style="eye_green",
-            glass_strength=normalize_glass_strength(appearance.glass_strength),
-            accent_color=normalize_accent_color(appearance.accent_color),
-        ),
-        "business_blue": ThemePalette(
-            window_bg="#e8edf5",
-            item_bg="#ffffff",
-            item_selected_bg="#b7d0f0",
-            theme_style="business_blue",
-            glass_strength=normalize_glass_strength(appearance.glass_strength),
-            accent_color=normalize_accent_color(appearance.accent_color),
-        ),
-        "graphite_night": dark,
-        "glacier_blue": ThemePalette(
-            window_bg="#edf7ff",
-            item_bg="#ffffff",
-            item_selected_bg="#a8d8f0",
-            theme_style="glacier_blue",
-            glass_strength=normalize_glass_strength(appearance.glass_strength),
-            accent_color=normalize_accent_color(appearance.accent_color),
-        ),
-        "misty_green": ThemePalette(
-            window_bg="#eef6f1",
-            item_bg="#ffffff",
-            item_selected_bg="#b9d8c8",
-            theme_style="misty_green",
-            glass_strength=normalize_glass_strength(appearance.glass_strength),
-            accent_color=normalize_accent_color(appearance.accent_color),
-        ),
-    }
-    return palettes[style]
+THEME_STYLE_COLORS: dict[ThemeStyle, tuple[str, str, str]] = {
+    "simple_white": ("#f6f9ff", "#ffffff", "#8fc1f3"),
+    "eye_green": ("#e9f1ea", "#ffffff", "#a9cdb4"),
+    "business_blue": ("#e8edf5", "#ffffff", "#b7d0f0"),
+    "graphite_night": ("#1d2430", "#27303f", "#32445c"),
+    "glacier_blue": ("#edf7ff", "#ffffff", "#a8d8f0"),
+    "misty_green": ("#eef6f1", "#ffffff", "#b9d8c8"),
+}
+
+
+def theme_style_colors(style: str) -> tuple[str, str, str]:
+    """Preset window/item/selected colors for a theme style."""
+    return THEME_STYLE_COLORS[normalize_theme_style(style)]
 
 
 _ACCENT_COLOR_HEX = {
@@ -410,11 +343,6 @@ def build_theme_tokens_from_appearance(appearance: AppearanceSettings) -> ThemeT
 
     window_rgb = _hex_to_rgb(window_hex, defaults.window_bg)
     is_dark_window = _luminance(window_rgb) < 145
-    palette = _theme_palette_for_appearance(appearance, is_dark_window)
-    window_hex = palette.window_bg if style != "graphite_night" or is_dark_window else appearance.window_bg
-    item_hex = palette.item_bg if style != "graphite_night" or is_dark_window else appearance.item_bg
-    selected_hex = palette.item_selected_bg if style != "graphite_night" or is_dark_window else appearance.item_selected_bg
-    window_rgb = _hex_to_rgb(window_hex, defaults.window_bg)
     item_rgb = _hex_to_rgb(item_hex, defaults.item_bg)
     selected_rgb = _hex_to_rgb(selected_hex, defaults.item_selected_bg)
 
@@ -550,6 +478,10 @@ def build_theme_tokens_from_appearance(appearance: AppearanceSettings) -> ThemeT
         glass_strength=glass_strength,
         theme_style=style,
         accent_color=accent_color,
+        accent_bg=accent_bg,
+        accent_hover_bg=accent_hover_bg,
+        accent_pressed_bg=accent_pressed_bg,
+        accent_border=accent_border,
     )
 
 
@@ -579,10 +511,10 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
     scroll_h_size = "8px" if tokens.show_scrollbar else "0px"
     handle_v_min = "32px" if tokens.show_scrollbar else "0px"
     handle_h_min = "32px" if tokens.show_scrollbar else "0px"
-    accent_bg, accent_hover_bg, accent_pressed_bg, accent_border = _resolve_accent_color(
-        normalize_accent_color(tokens.accent_color),
-        tokens.is_dark,
-    )
+    accent_bg = tokens.accent_bg
+    accent_hover_bg = tokens.accent_hover_bg
+    accent_pressed_bg = tokens.accent_pressed_bg
+    accent_border = tokens.accent_border
     if tokens.glass_strength == "standard":
         left_alpha = 222 if tokens.is_dark else 228
         nav_alpha = 190 if tokens.is_dark else 178
@@ -815,8 +747,9 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
         QPushButton {{
             background: {tokens.secondary_button_bg};
             border: 1px solid {tokens.secondary_button_border};
-            border-radius: 6px;
-            padding: 6px 12px;
+            border-radius: 7px;
+            min-height: 26px;
+            padding: 3px 12px;
         }}
         QPushButton:hover {{
             background: {tokens.secondary_button_hover_bg};
@@ -830,14 +763,28 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
             color: #ffffff;
             border: 1px solid {accent_border};
             font-weight: 600;
-            min-height: 32px;
-            padding: 5px 15px;
+            min-height: 26px;
+            padding: 3px 14px;
         }}
         QPushButton#primaryButton:hover {{
             background: {accent_hover_bg};
         }}
         QPushButton#primaryButton:pressed {{
             background: {accent_pressed_bg};
+        }}
+        QPushButton#dangerButton {{
+            background: #d0534b;
+            color: #ffffff;
+            border: 1px solid #e07068;
+            font-weight: 600;
+            min-height: 26px;
+            padding: 3px 14px;
+        }}
+        QPushButton#dangerButton:hover {{
+            background: #dd6259;
+        }}
+        QPushButton#dangerButton:pressed {{
+            background: #b8433c;
         }}
         QPushButton#updateButton {{
             background: {accent_bg};
@@ -891,8 +838,7 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
             border-color: transparent;
         }}
         QToolButton#settingsButton {{
-            font-size: 18px;
-            color: {tokens.text_secondary};
+            padding: 0px;
         }}
         QFrame#inlineEditorFrame {{
             background: rgba(255, 255, 255, 42);
@@ -1019,6 +965,40 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
         QLabel#dialogErrorLabel {{
             color: #c2413d;
             min-height: 18px;
+        }}
+        QLabel#messageDialogBody {{
+            color: {tokens.text_primary};
+        }}
+        QLabel#shortcutKeyLabel {{
+            color: {tokens.text_primary};
+            background: {tokens.input_bg};
+            border: 1px solid {tokens.input_border};
+            border-radius: 6px;
+            padding: 2px 10px;
+        }}
+        QWidget#toast {{
+            background: {tokens.menu_bg};
+            border: 1px solid {tokens.panel_border};
+            border-radius: 10px;
+        }}
+        QLabel#toastText {{
+            color: {tokens.text_primary};
+            font-size: {tokens.base_font_size}px;
+        }}
+        QToolButton#captureToggleButton {{
+            background: {search_bg};
+            border: 1px solid rgba(255, 255, 255, 120);
+            border-radius: 10px;
+            padding: 3px 10px;
+            color: {tokens.text_secondary};
+        }}
+        QToolButton#captureToggleButton:hover {{
+            border-color: {accent_border};
+        }}
+        QToolButton#captureToggleButton:checked {{
+            background: {accent_bg};
+            border: 1px solid {accent_border};
+            color: #ffffff;
         }}
         QPushButton#colorPickButton {{
             text-align: left;
