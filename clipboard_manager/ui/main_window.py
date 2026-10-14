@@ -16,6 +16,7 @@ from PySide6.QtCore import (
     QFileInfo,
     QIODevice,
     QObject,
+    QPoint,
     QRunnable,
     QSize,
     QThreadPool,
@@ -2316,7 +2317,7 @@ class MainWindow(QMainWindow):
                     if code:
                         return True, code
             except Exception:
-                pass
+                logger.debug("[UI] nativeEvent WM_NCHITTEST failed", exc_info=True)
         return super().nativeEvent(event_type, message)
 
     def _resize_hit_code(self, local: QPoint) -> int:

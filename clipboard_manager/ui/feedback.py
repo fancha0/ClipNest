@@ -53,7 +53,8 @@ class _MessageBase(ResizableDialog):
         self.adjustSize()
         width = max(self._min_size[0], min(self.sizeHint().width(), 560))
         self.setFixedWidth(width)
-        self.setFixedHeight(max(self._min_size[1], self.sizeHint().height()))
+        self.adjustSize()
+        self.setFixedHeight(max(self._min_size[1], self.height()))
 
 
 class MessageDialog(_MessageBase):

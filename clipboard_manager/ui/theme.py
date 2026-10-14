@@ -579,6 +579,7 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
         QWidget#rootGlass {{
             background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1,
                 stop: 0 {window_start_rgba}, stop: 0.52 {window_end_rgba}, stop: 1 {window_base_rgba});
+            border: 1px solid {tokens.panel_border};
         }}
         QWidget {{
             background: transparent;

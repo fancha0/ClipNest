@@ -7,7 +7,6 @@ import re
 import sys
 import time
 import threading
-from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, Signal
