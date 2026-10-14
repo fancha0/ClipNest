@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/clipnest.png" alt="ClipNest" width="120" />
+</p>
+
 # ClipNest
 
 <p align="center">
