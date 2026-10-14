@@ -1249,6 +1249,10 @@ class MainWindow(QMainWindow):
         self._resize_cursor_shape = None
         self._last_app_stylesheet: Optional[str] = None
         self._last_app_font_point: Optional[int] = None
+        self._backdrop_suspended = False
+        self._drag_poll_timer = QTimer(self)
+        self._drag_poll_timer.setInterval(100)
+        self._drag_poll_timer.timeout.connect(self._poll_drag_end)
         self._resize_cursor_timer = QTimer(self)
         self._resize_cursor_timer.setInterval(80)
         self._resize_cursor_timer.timeout.connect(self._update_resize_cursor)
@@ -2480,6 +2484,48 @@ class MainWindow(QMainWindow):
             return
         self._apply_resize_cursor(self._cursor_for_edges(self._edge_resize_edges(local)))
 
+    @staticmethod
+    def _is_win10() -> bool:
+        if sys.platform != "win32":
+            return False
+        try:
+            return int(sys.getwindowsversion().build) < 22000
+        except Exception:
+            return False
+
+    def begin_system_drag(self) -> None:
+        """Called right before a native move/resize: pause cursor polling and,
+        on Windows 10, suspend the acrylic backdrop (per-frame blur compositing
+        makes dragging laggy there)."""
+        self._resize_cursor_timer.stop()
+        self._apply_resize_cursor(None)
+        tokens = self._theme_tokens
+        if (
+            self._is_win10()
+            and self._backdrop_blur_enabled
+            and tokens is not None
+            and tokens.glass_strength == "transparent"
+        ):
+            try:
+                hwnd = int(self.winId())
+                if hwnd and disable_backdrop(hwnd):
+                    self._backdrop_suspended = True
+            except Exception:
+                logger.debug("[UI] suspend backdrop failed", exc_info=True)
+        if not self._drag_poll_timer.isActive():
+            self._drag_poll_timer.start()
+
+    def _poll_drag_end(self) -> None:
+        if QApplication.mouseButtons() & Qt.MouseButton.LeftButton:
+            return
+        self._drag_poll_timer.stop()
+        if self._backdrop_suspended:
+            self._backdrop_suspended = False
+            self._last_backdrop_state = None
+            self._apply_window_backdrop()
+        if self._panel_visible and not self._resize_cursor_timer.isActive():
+            self._resize_cursor_timer.start()
+
     def _try_edge_resize(self, watched, event: QEvent) -> bool:
         if sys.platform != "win32" or event.type() != QEvent.Type.MouseButtonPress:
             return False
@@ -2500,6 +2546,7 @@ class MainWindow(QMainWindow):
         handle = self.windowHandle()
         if handle is None:
             return False
+        self.begin_system_drag()
         handle.startSystemResize(edges)
         return True
 

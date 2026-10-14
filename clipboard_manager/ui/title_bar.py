@@ -71,8 +71,12 @@ class TitleBar(QWidget):
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
-            handle = self.window().windowHandle()
+            window = self.window()
+            handle = window.windowHandle()
             if handle is not None:
+                begin = getattr(window, "begin_system_drag", None)
+                if begin is not None:
+                    begin()
                 handle.startSystemMove()
                 event.accept()
                 return
