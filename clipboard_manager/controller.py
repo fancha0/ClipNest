@@ -500,7 +500,6 @@ class AppController:
             backdrop_blur=bool(getattr(appearance, "backdrop_blur", True)),
         )
         try:
-            self._window.set_appearance(normalized)
             self._save_appearance_settings(normalized)
         except Exception as exc:
             self._window.show_error(f"应用外观设置失败：{exc}")

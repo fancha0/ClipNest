@@ -1247,6 +1247,8 @@ class MainWindow(QMainWindow):
         self._backdrop_blur_enabled = True
         self._last_backdrop_state: Optional[tuple] = None
         self._resize_cursor_shape = None
+        self._last_app_stylesheet: Optional[str] = None
+        self._last_app_font_point: Optional[int] = None
         self._resize_cursor_timer = QTimer(self)
         self._resize_cursor_timer.setInterval(80)
         self._resize_cursor_timer.timeout.connect(self._update_resize_cursor)
@@ -1405,10 +1407,8 @@ class MainWindow(QMainWindow):
         self.capture_toggle_btn.setObjectName("captureToggleButton")
         self.capture_toggle_btn.setCheckable(True)
         self.capture_toggle_btn.setChecked(True)
-        self.capture_toggle_btn.setText("监听中")
         self.capture_toggle_btn.setFixedHeight(30)
         self.capture_toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.capture_toggle_btn.setToolTip("自动记录剪贴板：开（点击暂停）")
         self.add_item_btn = QToolButton()
         self.add_item_btn.setObjectName("addItemButton")
         self.add_item_btn.setIcon(_create_add_icon())
@@ -1544,16 +1544,7 @@ class MainWindow(QMainWindow):
 
     def set_capture_enabled(self, enabled: bool) -> None:
         self._capture_enabled = bool(enabled)
-        button = getattr(self, "capture_toggle_btn", None)
-        if button is not None:
-            button.blockSignals(True)
-            button.setChecked(self._capture_enabled)
-            button.setText("监听中" if self._capture_enabled else "已暂停")
-            button.setToolTip(
-                f"自动记录剪贴板：{'开（点击暂停）' if self._capture_enabled else '关（点击开启）'}"
-                f"　快捷键 {self._capture_hotkey_text()}"
-            )
-            button.blockSignals(False)
+        self._refresh_capture_button()
         action = getattr(self, "_capture_toggle_action", None)
         if action is not None:
             action.blockSignals(True)
@@ -1564,6 +1555,35 @@ class MainWindow(QMainWindow):
             tray.setToolTip(
                 APP_NAME if self._capture_enabled else f"{APP_NAME}（剪贴板监听已暂停）"
             )
+
+    def _refresh_capture_button(self) -> None:
+        button = getattr(self, "capture_toggle_btn", None)
+        if button is None:
+            return
+        enabled = bool(self._capture_enabled)
+        dark = bool(getattr(self._theme_tokens, "is_dark", False))
+        if enabled:
+            color = "#cdd8e6" if dark else "#5a6a7e"
+            icon = line_icon("capture_on", color, 18)
+            text = ""
+        else:
+            color = "#e07a72" if dark else "#c2413d"
+            icon = line_icon("capture_off", color, 18)
+            text = "已暂停"
+        button.blockSignals(True)
+        button.setChecked(enabled)
+        button.blockSignals(False)
+        button.setIcon(icon)
+        button.setIconSize(QSize(18, 18))
+        button.setText(text)
+        button.setToolTip(
+            f"自动记录剪贴板：{'开（点击暂停）' if enabled else '关（点击开启）'}"
+            f"　快捷键 {self._capture_hotkey_text()}"
+        )
+        button.setProperty("paused", not enabled)
+        style = button.style()
+        style.unpolish(button)
+        style.polish(button)
 
     def _on_capture_toggle_button(self, checked: bool) -> None:
         self.set_capture_enabled(bool(checked))
@@ -3001,9 +3021,17 @@ class MainWindow(QMainWindow):
 
     def _apply_theme(self) -> None:
         app_stylesheet = build_app_stylesheet(self._theme_tokens)
+        base_point = max(10, int(self._theme_tokens.base_font_size))
+        if (
+            app_stylesheet == self._last_app_stylesheet
+            and base_point == self._last_app_font_point
+        ):
+            return
+        self._last_app_stylesheet = app_stylesheet
+        self._last_app_font_point = base_point
         app = QApplication.instance()
         base_font = QFont(self.font())
-        base_font.setPointSize(max(10, int(self._theme_tokens.base_font_size)))
+        base_font.setPointSize(base_point)
         self.setUpdatesEnabled(False)
         try:
             if app is not None:
@@ -3021,6 +3049,7 @@ class MainWindow(QMainWindow):
             title_bar = getattr(self, "_title_bar", None)
             if title_bar is not None:
                 title_bar.apply_theme(self._theme_tokens)
+            self._refresh_capture_button()
             if self._tray_menu is not None:
                 self._tray_menu.setStyleSheet(self._menu_stylesheet())
         finally:

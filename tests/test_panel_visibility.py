@@ -35,6 +35,16 @@ class PanelVisibilityTests(unittest.TestCase):
         self.assertFalse(window._panel_visible)
         window.deleteLater()
 
+    def test_capture_button_state_text(self) -> None:
+        window = MainWindow()
+        window.set_capture_enabled(False)
+        self.assertEqual(window.capture_toggle_btn.text(), "已暂停")
+        self.assertTrue(window.capture_toggle_btn.property("paused"))
+        window.set_capture_enabled(True)
+        self.assertEqual(window.capture_toggle_btn.text(), "")
+        self.assertFalse(window.capture_toggle_btn.property("paused"))
+        window.deleteLater()
+
     def test_should_hide_follows_panel_state(self) -> None:
         window = MainWindow()
         window.show()

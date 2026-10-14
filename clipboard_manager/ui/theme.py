@@ -1005,19 +1005,20 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
             font-size: {tokens.base_font_size}px;
         }}
         QToolButton#captureToggleButton {{
-            background: {search_bg};
-            border: 1px solid rgba(255, 255, 255, 120);
+            background: transparent;
+            border: 1px solid transparent;
             border-radius: 10px;
-            padding: 3px 10px;
+            padding: 3px 8px;
             color: {tokens.text_secondary};
         }}
         QToolButton#captureToggleButton:hover {{
-            border-color: {accent_border};
+            background: {nav_hover_bg};
         }}
-        QToolButton#captureToggleButton:checked {{
-            background: {accent_bg};
-            border: 1px solid {accent_border};
-            color: #ffffff;
+        QToolButton#captureToggleButton[paused="true"] {{
+            background: rgba(209, 83, 75, 40);
+            border: 1px solid rgba(209, 83, 75, 150);
+            color: #d0534b;
+            padding: 3px 10px;
         }}
         QWidget#titleBar {{
             background: transparent;
