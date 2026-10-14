@@ -21,6 +21,8 @@ _DWMWA_USE_IMMERSIVE_DARK_MODE_LEGACY = 19  # Windows 10 build < 19041
 _DWMWA_CAPTION_COLOR = 35  # Windows 11 22000+
 _DWMWA_TEXT_COLOR = 36  # Windows 11 22000+
 _DWMWA_BORDER_COLOR = 34  # Windows 11 22000+
+_DWMWA_WINDOW_CORNER_PREFERENCE = 33  # Windows 11 22000+
+_DWMWCP_ROUND = 2
 
 
 def _hex_to_colorref(color_hex: str) -> int | None:
@@ -112,3 +114,28 @@ def apply_titlebar_theme(
         applied,
     )
     return applied
+
+
+def set_round_corners(hwnd: int, round_corners: bool = True) -> bool:
+    """Ask DWM to round (or square) the window corners (Windows 11 22000+).
+
+    Useful for frameless windows so they keep the native rounded look.
+    """
+    if sys.platform != "win32" or not hwnd or _windows_build() < 22000:
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        dwmapi = ctypes.windll.dwmapi
+        preference = ctypes.c_int(_DWMWCP_ROUND if round_corners else 1)
+        result = dwmapi.DwmSetWindowAttribute(
+            wintypes.HWND(int(hwnd)),
+            ctypes.c_uint(_DWMWA_WINDOW_CORNER_PREFERENCE),
+            ctypes.byref(preference),
+            ctypes.sizeof(preference),
+        )
+        return result == 0
+    except Exception:
+        logger.debug("set_round_corners failed", exc_info=True)
+        return False

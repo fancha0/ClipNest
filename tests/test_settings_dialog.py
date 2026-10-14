@@ -89,6 +89,28 @@ class SettingsDialogApplyTests(unittest.TestCase):
         dialog = self._make_dialog()
         self.assertEqual(dialog.result_payload().capture_toggle_hotkey, "Ctrl+Shift+P")
 
+    def test_backdrop_blur_default_true(self) -> None:
+        dialog = self._make_dialog()
+        self.assertTrue(dialog.result_payload().appearance.backdrop_blur)
+
+    def test_backdrop_blur_toggle_reflected_in_payload(self) -> None:
+        dialog = self._make_dialog()
+        dialog.backdrop_blur_chk.setChecked(False)
+        self.assertFalse(dialog.result_payload().appearance.backdrop_blur)
+
+    def test_display_toggles_reflected_in_payload(self) -> None:
+        dialog = self._make_dialog()
+        dialog.show_scrollbar_chk.setChecked(False)
+        dialog.antialias_chk.setChecked(False)
+        appearance = dialog.result_payload().appearance
+        self.assertFalse(appearance.show_scrollbar)
+        self.assertFalse(appearance.item_antialias)
+
+    def test_font_size_reflected_in_payload(self) -> None:
+        dialog = self._make_dialog()
+        dialog.font_size_spin.setValue(20)
+        self.assertEqual(dialog.result_payload().appearance.font_size, 20)
+
     def test_data_stats_labels_update(self) -> None:
         dialog = self._make_dialog()
         dialog.set_data_stats({"tabs": 3, "items": 12, "images": 4, "db_bytes": 2048})
@@ -108,10 +130,10 @@ class SettingsDialogApplyTests(unittest.TestCase):
         from clipboard_manager.ui.settings_widgets import SettingRow
 
         dialog = self._make_dialog()
-        dialog._apply_settings_filter("玻璃强度")
+        dialog._apply_settings_filter("开机")
         rows = dialog.findChildren(SettingRow)
-        matched = [row for row in rows if "玻璃强度" in row.search_text()]
-        unmatched = [row for row in rows if "开机" in row.search_text()]
+        matched = [row for row in rows if "开机" in row.search_text()]
+        unmatched = [row for row in rows if "滚动条" in row.search_text()]
         self.assertTrue(matched)
         self.assertTrue(all(not row.isHidden() for row in matched))
         self.assertTrue(all(row.isHidden() for row in unmatched))

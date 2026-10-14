@@ -96,6 +96,14 @@ class FeedbackWidgetTests(unittest.TestCase):
         self.assertEqual(preview._window, "#ffffff")
         self.assertEqual(preview._accent, "#123456")
 
+    def test_acrylic_tint_packing(self) -> None:
+        from clipboard_manager.ui.window_effects import argb_tint
+
+        self.assertEqual(argb_tint("#ffffff", 255), 0xFFFFFFFF)
+        self.assertEqual(argb_tint("#0000ff", 0), 0x00FF0000)
+        self.assertEqual(argb_tint("#0000ff", 128), 0x80FF0000)
+        self.assertEqual(argb_tint("bad-value", 0), 0x00FEFAF6)
+
 
 
 if __name__ == "__main__":

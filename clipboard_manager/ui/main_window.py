@@ -28,6 +28,7 @@ from PySide6.QtGui import (
     QAction,
     QCloseEvent,
     QColor,
+    QCursor,
     QDrag,
     QFont,
     QIcon,
@@ -76,9 +77,12 @@ from .update_dialog import UpdateDialog
 from .dialog_base import ResizableDialog, set_dialog_titlebar_theme
 from .image_mixin import ImageMimeMixin
 from .image_codec import encode_qimage_to_payload
-from .titlebar_theme import apply_titlebar_theme
+from .titlebar_theme import apply_titlebar_theme, set_round_corners
 from .item_presenter import present_item
 from .item_delegate import ClipItemDelegate
+from .frosted_overlay import FrostedOverlay
+from .window_effects import apply_acrylic, argb_tint, disable_backdrop
+from .title_bar import TitleBar
 from .feedback import (
     MessageDialog,
     NoteEditDialog,
@@ -1237,7 +1241,15 @@ class MainWindow(QMainWindow):
         # Tool window: no taskbar button, so the panel is accessed via the tray
         # icon or the global hotkey (matches a clipboard popup's role).
         self.setWindowFlag(Qt.WindowType.Tool, True)
+        self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.resize(980, 620)
+        self._backdrop_blur_enabled = True
+        self._last_backdrop_state: Optional[tuple] = None
+        self._resize_cursor_shape = None
+        self._resize_cursor_timer = QTimer(self)
+        self._resize_cursor_timer.setInterval(80)
+        self._resize_cursor_timer.timeout.connect(self._update_resize_cursor)
         self._apply_app_icon()
         self._panel_visible = False
         self._foreground_generation = 0
@@ -1322,8 +1334,14 @@ class MainWindow(QMainWindow):
         root.setObjectName("rootGlass")
         self.setCentralWidget(root)
         outer = QVBoxLayout(root)
-        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setContentsMargins(6, 6, 6, 6)
         outer.setSpacing(0)
+
+        icon_pixmap = self.windowIcon().pixmap(18, 18)
+        self._title_bar = TitleBar(APP_NAME, icon_pixmap, root)
+        self._title_bar.collapse_requested.connect(self._on_titlebar_collapse)
+        self._title_bar.quit_requested.connect(self._quit_application)
+        outer.addWidget(self._title_bar)
 
         self._main_splitter = QSplitter(Qt.Orientation.Horizontal)
         self._main_splitter.setChildrenCollapsible(True)
@@ -1490,6 +1508,10 @@ class MainWindow(QMainWindow):
         self.inline_save_btn.clicked.connect(self._on_inline_edit_save_clicked)
         self.inline_cancel_btn.clicked.connect(self.hide_inline_editor)
         self._build_settings_menu()
+        self._frosted_overlay = FrostedOverlay(root)
+        self._frosted_overlay.setGeometry(root.rect())
+        self._frosted_overlay.raise_()
+        root.installEventFilter(self)
         self._apply_theme()
 
     def _build_settings_menu(self) -> None:
@@ -1985,13 +2007,39 @@ class MainWindow(QMainWindow):
 
     def set_appearance(self, appearance: AppearanceSettings) -> None:
         self._appearance = appearance
+        self._backdrop_blur_enabled = bool(
+            getattr(appearance, "backdrop_blur", True)
+        )
         self._theme_tokens = build_theme_tokens_from_appearance(appearance)
         if self._item_delegate is not None:
             self._item_delegate.set_theme_tokens(self._theme_tokens)
             self._item_delegate.set_antialias_enabled(appearance.item_antialias)
         self._apply_theme()
         self._apply_titlebar_theme()
+        self._apply_window_backdrop()
         self.item_list.viewport().update()
+
+    def _apply_window_backdrop(self) -> None:
+        tokens = self._theme_tokens
+        if tokens is None:
+            return
+        try:
+            hwnd = int(self.winId())
+        except Exception:
+            return
+        if not hwnd:
+            return
+        strength = tokens.glass_strength
+        blur_active = bool(self._backdrop_blur_enabled) and strength == "transparent"
+        state = (blur_active, tokens.main_window_bg)
+        if state == self._last_backdrop_state:
+            return
+        self._last_backdrop_state = state
+        if blur_active:
+            apply_acrylic(hwnd, argb_tint(tokens.main_window_bg, 120))
+        else:
+            disable_backdrop(hwnd)
+        self._repaint_surfaces()
 
     def _apply_titlebar_theme(self) -> None:
         """Match the OS-drawn caption to the current theme (see titlebar_theme)."""
@@ -2011,6 +2059,7 @@ class MainWindow(QMainWindow):
             caption_hex=tokens.main_window_bg,
             text_hex=tokens.text_primary,
         )
+        set_round_corners(hwnd, True)
 
     def set_note_style(self, color_hex: str, font_size: int) -> None:
         self._note_text_color = color_hex
@@ -2185,10 +2234,15 @@ class MainWindow(QMainWindow):
         self._panel_visible = False
         self._panel_had_focus = False
         self._panel_watch_timer.stop()
+        self._resize_cursor_timer.stop()
+        self._apply_resize_cursor(None)
         self._foreground_generation += 1
         self.hide()
 
     def hide_panel(self) -> None:
+        self._hide_panel()
+
+    def _on_titlebar_collapse(self) -> None:
         self._hide_panel()
 
     def showEvent(self, event: QShowEvent) -> None:
@@ -2198,16 +2252,76 @@ class MainWindow(QMainWindow):
             self._panel_watch_timer.start()
         elif self.isActiveWindow():
             self._panel_had_focus = True
+        if not self._resize_cursor_timer.isActive():
+            self._resize_cursor_timer.start()
         # The native handle only exists once shown; re-apply so a hidden-at-startup
         # window still gets the themed caption.
         self._apply_titlebar_theme()
+        self._apply_window_backdrop()
         self.window_shown.emit()
 
     def hideEvent(self, event) -> None:
         self._panel_visible = False
         self._panel_had_focus = False
         self._panel_watch_timer.stop()
+        self._resize_cursor_timer.stop()
+        self._apply_resize_cursor(None)
         super().hideEvent(event)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        overlay = getattr(self, "_frosted_overlay", None)
+        root = self.centralWidget()
+        if overlay is not None and root is not None:
+            overlay.setGeometry(root.rect())
+            overlay.raise_()
+
+    def nativeEvent(self, event_type, message):
+        if sys.platform == "win32" and event_type == b"windows_generic_MSG":
+            try:
+                import ctypes
+                from ctypes import wintypes
+
+                msg = wintypes.MSG.from_address(int(message))
+                if msg.message == 0x0084 and not self.isMaximized():  # WM_NCHITTEST
+                    x = ctypes.c_short(msg.lParam & 0xFFFF).value
+                    y = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
+                    dpr = self.devicePixelRatioF() or 1.0
+                    local = self.mapFromGlobal(QPoint(int(x / dpr), int(y / dpr)))
+                    code = self._resize_hit_code(local)
+                    if code:
+                        return True, code
+            except Exception:
+                pass
+        return super().nativeEvent(event_type, message)
+
+    def _resize_hit_code(self, local: QPoint) -> int:
+        border = 6
+        width = self.width()
+        height = self.height()
+        x = local.x()
+        y = local.y()
+        left = x <= border
+        right = x >= width - border
+        top = y <= border
+        bottom = y >= height - border
+        if top and left:
+            return 13  # HTTOPLEFT
+        if top and right:
+            return 14  # HTTOPRIGHT
+        if bottom and left:
+            return 16  # HTBOTTOMLEFT
+        if bottom and right:
+            return 17  # HTBOTTOMRIGHT
+        if left:
+            return 10  # HTLEFT
+        if right:
+            return 11  # HTRIGHT
+        if top:
+            return 12  # HTTOP
+        if bottom:
+            return 15  # HTBOTTOM
+        return 0
 
     def _foreground_window_owner_is_self(self) -> Optional[bool]:
         """True if the current foreground window belongs to this process."""
@@ -2295,7 +2409,83 @@ class MainWindow(QMainWindow):
             self._panel_had_focus = True
         return super().event(event)
 
+    def _edge_resize_edges(self, local: QPoint):
+        border = 6
+        edges = Qt.Edge(0)
+        if local.x() <= border:
+            edges |= Qt.Edge.LeftEdge
+        if local.x() >= self.width() - border:
+            edges |= Qt.Edge.RightEdge
+        if local.y() <= border:
+            edges |= Qt.Edge.TopEdge
+        if local.y() >= self.height() - border:
+            edges |= Qt.Edge.BottomEdge
+        return edges
+
+    def _cursor_for_edges(self, edges):
+        if not edges:
+            return None
+        left = bool(edges & Qt.Edge.LeftEdge)
+        right = bool(edges & Qt.Edge.RightEdge)
+        top = bool(edges & Qt.Edge.TopEdge)
+        bottom = bool(edges & Qt.Edge.BottomEdge)
+        if (left and top) or (right and bottom):
+            return Qt.CursorShape.SizeFDiagCursor
+        if (right and top) or (left and bottom):
+            return Qt.CursorShape.SizeBDiagCursor
+        if left or right:
+            return Qt.CursorShape.SizeHorCursor
+        return Qt.CursorShape.SizeVerCursor
+
+    def _apply_resize_cursor(self, shape) -> None:
+        if shape == self._resize_cursor_shape:
+            return
+        if self._resize_cursor_shape is not None:
+            QApplication.restoreOverrideCursor()
+        if shape is not None:
+            QApplication.setOverrideCursor(shape)
+        self._resize_cursor_shape = shape
+
+    def _update_resize_cursor(self) -> None:
+        if (
+            not self.isVisible()
+            or self.isMaximized()
+            or QApplication.activeModalWidget() is not None
+        ):
+            self._apply_resize_cursor(None)
+            return
+        local = self.mapFromGlobal(QCursor.pos())
+        if not self.rect().contains(local):
+            self._apply_resize_cursor(None)
+            return
+        self._apply_resize_cursor(self._cursor_for_edges(self._edge_resize_edges(local)))
+
+    def _try_edge_resize(self, watched, event: QEvent) -> bool:
+        if sys.platform != "win32" or event.type() != QEvent.Type.MouseButtonPress:
+            return False
+        if watched is not self.centralWidget():
+            return False
+        if not self.isVisible() or self.isMaximized():
+            return False
+        button = getattr(event, "button", None)
+        if button is not None and button() != Qt.MouseButton.LeftButton:
+            return False
+        try:
+            global_pos = event.globalPosition().toPoint()
+        except Exception:
+            return False
+        edges = self._edge_resize_edges(self.mapFromGlobal(global_pos))
+        if not edges:
+            return False
+        handle = self.windowHandle()
+        if handle is None:
+            return False
+        handle.startSystemResize(edges)
+        return True
+
     def eventFilter(self, watched, event: QEvent) -> bool:
+        if self._try_edge_resize(watched, event):
+            return True
         if watched is self.search_input and event.type() == QEvent.Type.KeyPress:
             key = getattr(event, "key", None)
             key_value = key() if callable(key) else None
@@ -2814,20 +3004,37 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         base_font = QFont(self.font())
         base_font.setPointSize(max(10, int(self._theme_tokens.base_font_size)))
-        if app is not None:
-            app.setFont(base_font)
-            app.setStyleSheet(app_stylesheet)
-        else:
-            self.setFont(base_font)
-            self.setStyleSheet(app_stylesheet)
-        self.settings_button.setIcon(
-            resolved_line_icon("gear", bool(self._theme_tokens.is_dark), 18)
-        )
-        self.add_item_btn.setIcon(
-            _create_add_icon("#FFFFFF" if self._theme_tokens.is_dark else "#1f2937")
-        )
-        if self._tray_menu is not None:
-            self._tray_menu.setStyleSheet(self._menu_stylesheet())
+        self.setUpdatesEnabled(False)
+        try:
+            if app is not None:
+                app.setFont(base_font)
+                app.setStyleSheet(app_stylesheet)
+            else:
+                self.setFont(base_font)
+                self.setStyleSheet(app_stylesheet)
+            self.settings_button.setIcon(
+                resolved_line_icon("gear", bool(self._theme_tokens.is_dark), 18)
+            )
+            self.add_item_btn.setIcon(
+                _create_add_icon("#FFFFFF" if self._theme_tokens.is_dark else "#1f2937")
+            )
+            title_bar = getattr(self, "_title_bar", None)
+            if title_bar is not None:
+                title_bar.apply_theme(self._theme_tokens)
+            if self._tray_menu is not None:
+                self._tray_menu.setStyleSheet(self._menu_stylesheet())
+        finally:
+            self.setUpdatesEnabled(True)
+        self._repaint_surfaces()
+
+    def _repaint_surfaces(self) -> None:
+        overlay = getattr(self, "_frosted_overlay", None)
+        if overlay is not None:
+            overlay.update()
+        central = self.centralWidget()
+        if central is not None:
+            central.update()
+        self.update()
 
 
     def _apply_light_theme(self) -> None:

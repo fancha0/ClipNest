@@ -65,7 +65,7 @@ class PresetTests(unittest.TestCase):
         self.assertEqual(appearance.item_bg, "#ffffff")
         self.assertEqual(appearance.item_selected_bg, "#a9cdb4")
         self.assertEqual(appearance.theme_style, "eye_green")
-        self.assertEqual(appearance.glass_strength, "glass")
+        self.assertEqual(appearance.glass_strength, "transparent")
         self.assertEqual(appearance.accent_color, "auto")
 
     def test_graphite_night_style_builds_dark_tokens(self) -> None:

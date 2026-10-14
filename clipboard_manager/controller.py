@@ -341,8 +341,13 @@ class AppController:
                 defaults.item_antialias,
             ),
             theme_style=normalize_theme_style(self._repository.get_setting("appearance_theme_style")),
-            glass_strength=normalize_glass_strength(self._repository.get_setting("appearance_glass_strength")),
+            # 玻璃强度设置项已移除，统一使用「通透」。
+            glass_strength="transparent",
             accent_color=normalize_accent_color(self._repository.get_setting("appearance_accent_color")),
+            backdrop_blur=self._parse_bool_setting(
+                "appearance_backdrop_blur",
+                defaults.backdrop_blur,
+            ),
         )
 
     def _save_appearance_settings(self, appearance: AppearanceSettings) -> None:
@@ -355,6 +360,9 @@ class AppController:
         self._repository.set_setting("appearance_theme_style", appearance.theme_style)
         self._repository.set_setting("appearance_glass_strength", appearance.glass_strength)
         self._repository.set_setting("appearance_accent_color", appearance.accent_color)
+        self._repository.set_setting(
+            "appearance_backdrop_blur", "1" if appearance.backdrop_blur else "0"
+        )
 
     def _system_dark(self) -> bool:
         try:
@@ -489,6 +497,7 @@ class AppController:
             theme_style=normalize_theme_style(appearance.theme_style),
             glass_strength=normalize_glass_strength(appearance.glass_strength),
             accent_color=normalize_accent_color(appearance.accent_color),
+            backdrop_blur=bool(getattr(appearance, "backdrop_blur", True)),
         )
         try:
             self._window.set_appearance(normalized)

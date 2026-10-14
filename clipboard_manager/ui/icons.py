@@ -154,6 +154,9 @@ def line_icon(kind: str, color: str = "#5a6a7e", size: int = 16) -> QIcon:
     elif kind == "close":
         painter.drawLine(p(4, 4), p(12, 12))
         painter.drawLine(p(12, 4), p(4, 12))
+    elif kind == "collapse":
+        painter.drawLine(p(4, 6.5), p(8, 10.5))
+        painter.drawLine(p(8, 10.5), p(12, 6.5))
     elif kind == "copy":
         painter.drawRoundedRect(QRectF(5.4 * s, 3.0 * s, 7.6 * s, 8.0 * s), 1.4 * s, 1.4 * s)
         painter.drawLine(p(3.0, 5.0), p(3.0, 12.8))

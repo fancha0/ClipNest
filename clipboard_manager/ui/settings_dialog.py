@@ -25,8 +25,6 @@ from PySide6.QtWidgets import (
 
 from .theme import (
     AppearanceSettings,
-    ACCENT_COLOR_LABELS,
-    GLASS_STRENGTH_LABELS,
     THEME_MODES,
     THEME_STYLE_LABELS,
     build_theme_tokens_from_appearance,
@@ -463,39 +461,6 @@ class SettingsDialog(ResizableDialog):
         preview_section.add_widget(self.preview)
         layout.addWidget(preview_section)
 
-        self.glass_strength_segment = SegmentedControl(
-            [(key, GLASS_STRENGTH_LABELS[key]) for key in ("standard", "glass", "transparent")],
-            page,
-        )
-        self.glass_strength_segment.set_current(self._appearance.glass_strength)
-        self.glass_strength_segment.valueChanged.connect(lambda _=None: self._refresh_preview())
-
-        self.accent_color_combo = QComboBox(page)
-        self.accent_color_combo.setFixedWidth(150)
-        for accent_key, accent_label in ACCENT_COLOR_LABELS.items():
-            self.accent_color_combo.addItem(accent_label, accent_key)
-        accent_index = self.accent_color_combo.findData(self._appearance.accent_color)
-        if accent_index >= 0:
-            self.accent_color_combo.setCurrentIndex(accent_index)
-        self.accent_color_combo.currentIndexChanged.connect(lambda _=None: self._refresh_preview())
-
-        style_options = SettingsSection("玻璃与强调色", page)
-        style_options.add_row(
-            SettingRow(
-                "玻璃强度",
-                self.glass_strength_segment,
-                "影响导航、条目和搜索框的透明程度。",
-            )
-        )
-        style_options.add_row(
-            SettingRow(
-                "强调色",
-                self.accent_color_combo,
-                "影响按钮、选中态、导航竖条、开关和焦点颜色。",
-            )
-        )
-        layout.addWidget(style_options)
-
         self.font_size_spin = QSpinBox(page)
         self.font_size_spin.setRange(10, 28)
         self.font_size_spin.setFixedWidth(120)
@@ -520,6 +485,8 @@ class SettingsDialog(ResizableDialog):
         self.show_scrollbar_chk.setChecked(bool(self._appearance.show_scrollbar))
         self.antialias_chk = ToggleSwitch(page)
         self.antialias_chk.setChecked(bool(self._appearance.item_antialias))
+        self.backdrop_blur_chk = ToggleSwitch(page)
+        self.backdrop_blur_chk.setChecked(bool(self._appearance.backdrop_blur))
 
         reset_btn = QPushButton("重置外观为默认", page)
         reset_btn.clicked.connect(self._reset_appearance_defaults)
@@ -529,6 +496,13 @@ class SettingsDialog(ResizableDialog):
         display_section.add_row(SettingRow("显示滚动条", self.show_scrollbar_chk))
         display_section.add_row(
             SettingRow("条目抗锯齿", self.antialias_chk, "关闭后绘制更快，边缘略硬。")
+        )
+        display_section.add_row(
+            SettingRow(
+                "背景模糊",
+                self.backdrop_blur_chk,
+                "「通透」档会模糊桌面背景；个别机器卡顿可关闭。",
+            )
         )
         display_section.add_row(SettingRow("恢复默认外观", reset_btn))
         layout.addWidget(display_section)
@@ -916,14 +890,11 @@ class SettingsDialog(ResizableDialog):
         self.font_size_spin.setValue(int(self._appearance.font_size))
         self.show_scrollbar_chk.setChecked(bool(self._appearance.show_scrollbar))
         self.antialias_chk.setChecked(bool(self._appearance.item_antialias))
+        self.backdrop_blur_chk.setChecked(bool(self._appearance.backdrop_blur))
         self.window_bg_btn.set_color(self._appearance.window_bg)
         self.item_bg_btn.set_color(self._appearance.item_bg)
         self.item_selected_bg_btn.set_color(self._appearance.item_selected_bg)
         self.theme_style_selector.set_current(self._appearance.theme_style)
-        self.glass_strength_segment.set_current(self._appearance.glass_strength)
-        self.accent_color_combo.setCurrentIndex(
-            self.accent_color_combo.findData(self._appearance.accent_color)
-        )
         self._refresh_preview()
 
     # ---------- results ----------
@@ -985,8 +956,9 @@ class SettingsDialog(ResizableDialog):
                 self._appearance,
                 font_size=int(self.font_size_spin.value()),
                 theme_style=str(self.theme_style_selector.current_style() or self._appearance.theme_style),
-                glass_strength=str(self.glass_strength_segment.current_key() or self._appearance.glass_strength),
-                accent_color=str(self.accent_color_combo.currentData() or self._appearance.accent_color),
+                backdrop_blur=bool(self.backdrop_blur_chk.isChecked()),
+                show_scrollbar=bool(self.show_scrollbar_chk.isChecked()),
+                item_antialias=bool(self.antialias_chk.isChecked()),
             ),
             theme_mode=normalize_theme_mode(
                 str(self.theme_mode_segment.current_key() or "follow_system")

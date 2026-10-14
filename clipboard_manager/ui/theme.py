@@ -83,6 +83,7 @@ class AppearanceSettings:
     theme_style: ThemeStyle = "eye_green"
     glass_strength: GlassStrength = "glass"
     accent_color: AccentColor = "auto"
+    backdrop_blur: bool = True
 
 
 def default_appearance_settings() -> AppearanceSettings:
@@ -94,8 +95,9 @@ def default_appearance_settings() -> AppearanceSettings:
         show_scrollbar=True,
         item_antialias=True,
         theme_style="eye_green",
-        glass_strength="glass",
+        glass_strength="transparent",
         accent_color="auto",
+        backdrop_blur=True,
     )
 
 
@@ -108,8 +110,9 @@ def default_dark_appearance_settings() -> AppearanceSettings:
         show_scrollbar=True,
         item_antialias=True,
         theme_style="graphite_night",
-        glass_strength="glass",
+        glass_strength="transparent",
         accent_color="auto",
+        backdrop_blur=True,
     )
 
 
@@ -139,6 +142,7 @@ def effective_appearance(
             theme_style=normalize_theme_style(user_appearance.theme_style),
             glass_strength=normalize_glass_strength(user_appearance.glass_strength),
             accent_color=normalize_accent_color(user_appearance.accent_color),
+            backdrop_blur=bool(getattr(user_appearance, "backdrop_blur", True)),
         )
     return replace(
         user_appearance,
@@ -225,6 +229,7 @@ class ThemeTokens:
     accent_hover_bg: str = "#248bdc"
     accent_pressed_bg: str = "#0f62aa"
     accent_border: str = "#5ab7ed"
+    backdrop_blur: bool = True
 
 
 def _clamp(value: int) -> int:
@@ -482,6 +487,7 @@ def build_theme_tokens_from_appearance(appearance: AppearanceSettings) -> ThemeT
         accent_hover_bg=accent_hover_bg,
         accent_pressed_bg=accent_pressed_bg,
         accent_border=accent_border,
+        backdrop_blur=bool(getattr(appearance, "backdrop_blur", True)),
     )
 
 
@@ -521,18 +527,31 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
         row_alpha = 24 if tokens.is_dark else 176
         footer_alpha = 186 if tokens.is_dark else 174
         item_alpha = 186 if tokens.is_dark else 176
+        window_alpha = 238
     elif tokens.glass_strength == "glass":
         left_alpha = 184 if tokens.is_dark else 184
         nav_alpha = 132 if tokens.is_dark else 96
         row_alpha = 12 if tokens.is_dark else 104
         footer_alpha = 128 if tokens.is_dark else 110
         item_alpha = 158 if tokens.is_dark else 128
+        window_alpha = 206
     else:
         left_alpha = 160 if tokens.is_dark else 150
         nav_alpha = 92 if tokens.is_dark else 72
         row_alpha = 8 if tokens.is_dark else 62
         footer_alpha = 92 if tokens.is_dark else 78
         item_alpha = 132 if tokens.is_dark else 96
+        window_alpha = 168
+    blur_on = bool(tokens.backdrop_blur) and tokens.glass_strength == "transparent"
+    if blur_on:
+        # 通透 + 模糊：窗口底色压到很低，颜色主要由 acrylic 染色提供。
+        window_alpha = 26
+    wr, wg, wb = _hex_to_rgb(tokens.window_start, tokens.main_window_bg)
+    er, eg, eb = _hex_to_rgb(tokens.window_end, tokens.main_window_bg)
+    br, bg, bb = _hex_to_rgb(tokens.main_window_bg, tokens.main_window_bg)
+    window_start_rgba = f"rgba({wr}, {wg}, {wb}, {window_alpha})"
+    window_end_rgba = f"rgba({er}, {eg}, {eb}, {window_alpha})"
+    window_base_rgba = f"rgba({br}, {bg}, {bb}, {window_alpha})"
     left_panel_bg = f"rgba(15, 27, 48, {left_alpha})" if tokens.is_dark else f"rgba(246, 250, 255, {left_alpha})"
     nav_bg = f"rgba(12, 24, 44, {nav_alpha})" if tokens.is_dark else f"rgba(232, 242, 252, {nav_alpha})"
     footer_bg = f"rgba(12, 24, 44, {footer_alpha})" if tokens.is_dark else f"rgba(232, 242, 252, {footer_alpha})"
@@ -555,11 +574,11 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
 
     return f"""
         QMainWindow {{
-            background: {tokens.main_window_bg};
+            background: transparent;
         }}
         QWidget#rootGlass {{
             background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1,
-                stop: 0 {tokens.window_start}, stop: 0.52 {tokens.window_end}, stop: 1 {tokens.main_window_bg});
+                stop: 0 {window_start_rgba}, stop: 0.52 {window_end_rgba}, stop: 1 {window_base_rgba});
         }}
         QWidget {{
             background: transparent;
@@ -999,6 +1018,25 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
             background: {accent_bg};
             border: 1px solid {accent_border};
             color: #ffffff;
+        }}
+        QWidget#titleBar {{
+            background: transparent;
+        }}
+        QLabel#titleBarTitle {{
+            color: {tokens.text_primary};
+            font-weight: 600;
+        }}
+        QToolButton#titleBarButton, QToolButton#titleBarCloseButton {{
+            background: transparent;
+            border: none;
+            border-radius: 6px;
+            padding: 0px;
+        }}
+        QToolButton#titleBarButton:hover {{
+            background: {nav_hover_bg};
+        }}
+        QToolButton#titleBarCloseButton:hover {{
+            background: rgba(209, 83, 75, 210);
         }}
         QPushButton#colorPickButton {{
             text-align: left;

@@ -22,6 +22,19 @@ class PanelVisibilityTests(unittest.TestCase):
         self.assertTrue(bool(window.windowFlags() & Qt.WindowType.Tool))
         window.deleteLater()
 
+    def test_panel_is_frameless(self) -> None:
+        window = MainWindow()
+        self.assertTrue(bool(window.windowFlags() & Qt.WindowType.FramelessWindowHint))
+        window.deleteLater()
+
+    def test_titlebar_collapse_hides_panel(self) -> None:
+        window = MainWindow()
+        window.show()
+        self.assertTrue(window.should_hide_on_hotkey())
+        window._title_bar._collapse_btn.click()
+        self.assertFalse(window._panel_visible)
+        window.deleteLater()
+
     def test_should_hide_follows_panel_state(self) -> None:
         window = MainWindow()
         window.show()
