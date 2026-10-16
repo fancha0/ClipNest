@@ -45,6 +45,7 @@ class _MessageBase(ResizableDialog):
         body.setObjectName("messageDialogBody")
         body.setWordWrap(True)
         body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._body_label = body
         row.addWidget(body, 1)
         layout.addLayout(row)
         return layout
@@ -107,6 +108,43 @@ class ConfirmDialog(_MessageBase):
         buttons.addWidget(confirm_btn)
         layout.addLayout(buttons)
         self._finalize()
+
+
+class ProgressDialog(_MessageBase):
+    """长耗时后台操作用的不可关闭提示框。
+
+    没有按钮、屏蔽 ESC 和关闭按钮，直到 finish() 才放行，避免用户中途打断。
+    """
+
+    def __init__(
+        self,
+        parent: Optional[QWidget],
+        title: str,
+        message: str,
+        kind: str = "info",
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
+        layout = self._build_body(kind, message)
+        layout.addStretch(1)
+        self._finalize()
+
+    def set_message(self, message: str) -> None:
+        self._body_label.setText(message)
+        self._finalize()
+
+    def finish(self) -> None:
+        self.done(QDialog.DialogCode.Accepted)
+
+    def reject(self) -> None:
+        # 进行中不接受 Esc / 关闭
+        return
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Escape:
+            return
+        super().keyPressEvent(event)
 
 
 class TextInputDialog(ResizableDialog):

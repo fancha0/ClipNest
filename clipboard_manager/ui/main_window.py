@@ -87,6 +87,7 @@ from .title_bar import TitleBar
 from .feedback import (
     MessageDialog,
     NoteEditDialog,
+    ProgressDialog,
     TextInputDialog,
     show_confirm,
     show_toast,
@@ -1230,6 +1231,7 @@ class MainWindow(QMainWindow):
     autostart_change_requested = Signal(bool)
     capture_enabled_changed = Signal(bool)
     clear_all_data_requested = Signal()
+    vacuum_database_requested = Signal()
     window_shown = Signal()
     settings_save_requested = Signal(object)
     check_update_requested = Signal()
@@ -1278,6 +1280,7 @@ class MainWindow(QMainWindow):
         self._capture_hotkey_hint = "Ctrl+Shift+P"
         self._capture_toggle_action: Optional[QAction] = None
         self._data_stats_provider = None
+        self._vacuum_progress_dialog: Optional[ProgressDialog] = None
         self._note_text_color = "#1f2937"
         self._note_font_size = 13
         self._pinned_accent_color = "#1fb8cb"
@@ -1302,6 +1305,7 @@ class MainWindow(QMainWindow):
         self._pending_render_restore_id: Optional[int] = None
         self._pending_render_drag_enabled = True
         self._pending_render_file_icon_provider: Optional[QFileIconProvider] = None
+        self._file_icon_provider = QFileIconProvider()
         self._pending_render_started_at = 0.0
         self._pending_render_first_batch_logged = False
         self._thumb_icon_cache: dict[str, QIcon] = {}
@@ -1623,6 +1627,7 @@ class MainWindow(QMainWindow):
         dialog.apply_requested.connect(self._on_settings_apply_requested)
         dialog.check_update_requested.connect(self.check_update_requested.emit)
         dialog.clear_data_requested.connect(self.clear_all_data_requested.emit)
+        dialog.vacuum_database_requested.connect(self.vacuum_database_requested.emit)
         try:
             accepted = self._exec_modal_dialog(dialog)
         finally:
@@ -1741,36 +1746,41 @@ class MainWindow(QMainWindow):
         self._item_render_generation += 1
         self._item_list_search_mode = bool(search_mode)
         drag_enabled = not self._item_list_search_mode
-        self.item_list.set_reorder_enabled(False if len(items) > 50 else drag_enabled)
-        self._suppress_item_reorder_emit = True
-        self.item_list.clear()
-        query = self.search_input.text().strip()
-        if search_mode and query:
-            if items:
-                self.item_list.set_empty_hint("")
-                self.search_input.setPlaceholderText(f"搜索全部条目...（找到 {len(items)} 条，Ctrl+F 聚焦 / ESC 退出）")
-            else:
-                self.item_list.set_empty_hint(f"没有找到匹配“{query}”的条目\n换个关键词试试")
-                self.search_input.setPlaceholderText("搜索全部条目...（无匹配结果，ESC 退出）")
-        else:
-            self.item_list.set_empty_hint("")
-            self.search_input.setPlaceholderText("搜索全部条目...（Ctrl+F）")
-        self._pending_render_items = list(items)
-        self._pending_render_index = 0
-        self._pending_render_search_mode = bool(search_mode)
-        self._pending_render_tab_name_map = dict(tab_name_map or {})
-        self._pending_render_restore_id = self._last_selected_item_id
-        self._pending_render_drag_enabled = drag_enabled
-        self._pending_render_file_icon_provider = QFileIconProvider()
-        self._pending_render_started_at = time.perf_counter()
-        self._pending_render_first_batch_logged = False
+        # 先暂停重绘，清空 + 首批 50 条画完再一次性上屏，避免闪烁
+        self.item_list.setUpdatesEnabled(False)
         try:
-            self._append_item_batch(50)
-        finally:
-            if self._pending_render_index >= len(self._pending_render_items):
-                self._finish_item_render()
+            self.item_list.set_reorder_enabled(False if len(items) > 50 else drag_enabled)
+            self._suppress_item_reorder_emit = True
+            self.item_list.clear()
+            query = self.search_input.text().strip()
+            if search_mode and query:
+                if items:
+                    self.item_list.set_empty_hint("")
+                    self.search_input.setPlaceholderText(f"搜索全部条目...（找到 {len(items)} 条，Ctrl+F 聚焦 / ESC 退出）")
+                else:
+                    self.item_list.set_empty_hint(f"没有找到匹配“{query}”的条目\n换个关键词试试")
+                    self.search_input.setPlaceholderText("搜索全部条目...（无匹配结果，ESC 退出）")
             else:
-                self._item_render_timer.start(1)
+                self.item_list.set_empty_hint("")
+                self.search_input.setPlaceholderText("搜索全部条目...（Ctrl+F）")
+            self._pending_render_items = list(items)
+            self._pending_render_index = 0
+            self._pending_render_search_mode = bool(search_mode)
+            self._pending_render_tab_name_map = dict(tab_name_map or {})
+            self._pending_render_restore_id = self._last_selected_item_id
+            self._pending_render_drag_enabled = drag_enabled
+            self._pending_render_file_icon_provider = self._file_icon_provider
+            self._pending_render_started_at = time.perf_counter()
+            self._pending_render_first_batch_logged = False
+            try:
+                self._append_item_batch(50)
+            finally:
+                if self._pending_render_index >= len(self._pending_render_items):
+                    self._finish_item_render()
+                else:
+                    self._item_render_timer.start(1)
+        finally:
+            self.item_list.setUpdatesEnabled(True)
 
     def _render_next_item_batch(self) -> None:
         if not self._pending_render_items:
@@ -1808,7 +1818,7 @@ class MainWindow(QMainWindow):
                 )
         if not self._pending_render_first_batch_logged:
             elapsed_ms = (time.perf_counter() - self._pending_render_started_at) * 1000
-            logger.info(
+            logger.debug(
                 "[Perf] item_list first_batch rendered=%s total=%s search_mode=%s ms=%.1f",
                 self._pending_render_index,
                 len(self._pending_render_items),
@@ -1830,15 +1840,24 @@ class MainWindow(QMainWindow):
         self._pending_render_file_icon_provider = None
         self.item_list.set_reorder_enabled(self._pending_render_drag_enabled)
         self._suppress_item_reorder_emit = False
-        logger.info(
+        logger.debug(
             "[Perf] item_list render_done total=%s search_mode=%s ms=%.1f",
             total,
             self._pending_render_search_mode,
             elapsed_ms,
         )
 
-    def _cached_thumb_icon(self, thumb_blob: bytes) -> Optional[QIcon]:
-        key = hashlib.sha256(thumb_blob).hexdigest()
+    @staticmethod
+    def _thumb_cache_key(item_id: object, thumb_blob: bytes) -> str:
+        # 用 id + 长度 + 头部字节做 key，比对整个 blob 算 sha256 便宜得多，
+        # 且 item id 对应的缩略图被编辑更新时（长度/内容变了）仍然不会串
+        return f"{item_id}:{len(thumb_blob)}:{thumb_blob[:12].hex()}"
+
+    def _cached_thumb_icon(self, item: ClipItem) -> Optional[QIcon]:
+        thumb_blob = item.thumb_blob
+        if not thumb_blob:
+            return None
+        key = self._thumb_cache_key(item.id, thumb_blob)
         icon = self._thumb_icon_cache.get(key)
         if icon is not None:
             return icon
@@ -1847,7 +1866,9 @@ class MainWindow(QMainWindow):
             return None
         icon = QIcon(pixmap)
         if len(self._thumb_icon_cache) >= 512:
-            self._thumb_icon_cache.clear()
+            # 只淘汰最旧的一批，避免整表清空导致下一轮全部重解码
+            for stale_key in list(self._thumb_icon_cache)[:64]:
+                self._thumb_icon_cache.pop(stale_key, None)
         self._thumb_icon_cache[key] = icon
         return icon
 
@@ -1885,7 +1906,7 @@ class MainWindow(QMainWindow):
 
         icon: QIcon | None = None
         if row.icon_kind == "image" and item.thumb_blob:
-            icon = self._cached_thumb_icon(item.thumb_blob)
+            icon = self._cached_thumb_icon(item)
         elif row.icon_kind == "file" and row.file_icon_path:
             provider = file_icon_provider or QFileIconProvider()
             file_icon = provider.icon(QFileInfo(row.file_icon_path))
@@ -1911,11 +1932,45 @@ class MainWindow(QMainWindow):
         lw_item.setData(ITEM_PINNED_ROLE, bool(item.pinned))
         return lw_item
 
-    def prepend_item(self, item: ClipItem) -> None:
-        if self._item_list_search_mode:
-            return
+    def prepend_item(self, item: ClipItem, deleted_ids: Optional[list[int]] = None) -> bool:
+        """只往列表里插一条新条目，避免整表重建。
+
+        返回 True 表示已增量更新，调用方可以跳过 set_items 全量刷新。
+        返回 False 表示当前状态不适合增量（搜索模式/渲染中/列表与库不同步），
+        调用方应回退到整表刷新。
+        """
+        if self._item_list_search_mode or self._pending_render_items:
+            return False
+        if deleted_ids:
+            wanted = {int(x) for x in deleted_ids}
+            for row in range(self.item_list.count() - 1, -1, -1):
+                lw = self.item_list.item(row)
+                if lw is None:
+                    continue
+                try:
+                    row_id = int(lw.data(ITEM_ID_ROLE))
+                except (TypeError, ValueError):
+                    continue
+                if row_id in wanted:
+                    self.item_list.takeItem(row)
+                    wanted.discard(row_id)
+            if wanted:
+                # 列表里找不到刚被容量裁掉的条目，说明已经不同步，退回整表刷新
+                return False
         lw_item = self._create_list_item(item, search_mode=False)
-        self.item_list.insertItem(0, lw_item)
+        insert_at = 0
+        row_count = self.item_list.count()
+        # 排序规则是 pinned 降序在前，所以新条目要插到所有置顶条目之后
+        while insert_at < row_count and bool(
+            self.item_list.item(insert_at).data(ITEM_PINNED_ROLE)
+        ):
+            insert_at += 1
+        self.item_list.setUpdatesEnabled(False)
+        try:
+            self.item_list.insertItem(insert_at, lw_item)
+        finally:
+            self.item_list.setUpdatesEnabled(True)
+        return True
 
     def _focus_search_input(self) -> None:
         self.search_input.setFocus(Qt.FocusReason.ShortcutFocusReason)
@@ -2399,14 +2454,45 @@ class MainWindow(QMainWindow):
         self._hide_panel()
         self._show_tray_hint_once()
 
-    def confirm(self, title: str, message: str) -> bool:
+    def confirm(
+        self,
+        title: str,
+        message: str,
+        confirm_text: str = "删除",
+        destructive: bool = True,
+    ) -> bool:
         return show_confirm(
             self,
             title,
             message,
-            confirm_text="删除",
-            destructive=True,
+            confirm_text=confirm_text,
+            destructive=destructive,
         )
+
+    def show_vacuum_progress(self) -> None:
+        """打开一个不可关闭的进度框，用于长时间的数据库整理。"""
+        if self._vacuum_progress_dialog is not None:
+            return
+        dialog = ProgressDialog(
+            self,
+            "压缩数据库",
+            "正在整理数据库并释放空间，请稍候……\n\n期间请不要复制内容，完成后会自动关闭。",
+            kind="info",
+        )
+        self._vacuum_progress_dialog = dialog
+        dialog.show()  # 不用 exec()：让事件循环继续跑，后台线程才能回调
+
+    def finish_vacuum_progress(self, before: int, after: int, error: str) -> None:
+        dialog = self._vacuum_progress_dialog
+        self._vacuum_progress_dialog = None
+        if dialog is not None:
+            dialog.finish()
+            dialog.deleteLater()
+        if error:
+            self.show_error(f"压缩数据库失败：{error}")
+            return
+        freed = max(0, int(before) - int(after))
+        self.show_info(f"数据库压缩完成，释放了 {freed // (1024 * 1024)} MB。")
 
     def show_error(self, message: str) -> None:
         MessageDialog(self, "出错了", message, kind="error").exec()

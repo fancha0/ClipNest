@@ -792,6 +792,153 @@ class ClipRepositoryTests(unittest.TestCase):
         self.assertEqual(first.id, second.id)
         self.assertNotEqual(second.id, third.id)
 
+    @staticmethod
+    def _special_parsed(payload: bytes) -> ParsedClipboardItem:
+        return ParsedClipboardItem(
+            item_type="special",
+            display_text="[特殊内容]",
+            plain_text="",
+            html_text="",
+            image_blob=None,
+            thumb_blob=None,
+            width=None,
+            height=None,
+            file_paths=[],
+            mime_formats=["application/x-qt-windows-mime;value=\"PixPinData\""],
+            raw_parts=[
+                {
+                    "mime_type": "application/x-qt-windows-mime;value=\"PixPinData\"",
+                    "payload_blob": payload,
+                }
+            ],
+        )
+
+    def test_insert_parsed_item_ex_flags_duplicate_and_eviction(self) -> None:
+        repo = self._make_repo(self.db_path, max_items_per_tab=1)
+        tab_id = _tab_ids(repo)[0]
+
+        first, created_first, evicted_first = repo.insert_parsed_item_ex(
+            tab_id, self._special_parsed(b"\x01"), captured_at_ms=1000
+        )
+        dup, created_dup, evicted_dup = repo.insert_parsed_item_ex(
+            tab_id, self._special_parsed(b"\x01"), captured_at_ms=1500
+        )
+        other, created_other, evicted_other = repo.insert_parsed_item_ex(
+            tab_id, self._special_parsed(b"\x02"), captured_at_ms=4000
+        )
+        assert first is not None and dup is not None and other is not None
+
+        # 窗口内重复抓取复用旧行，调用方据此跳过整表刷新
+        self.assertTrue(created_first)
+        self.assertFalse(created_dup)
+        self.assertTrue(created_other)
+        self.assertEqual(first.id, dup.id)
+        self.assertNotEqual(dup.id, other.id)
+
+        # 超出容量时要回报被裁掉的 id，列表才能只删一行而不是整表重建
+        self.assertEqual(evicted_first, [])
+        self.assertEqual(evicted_dup, [])
+        self.assertEqual(evicted_other, [first.id])
+
+    def test_insert_parsed_item_image_skips_duplicate_mime_parts(self) -> None:
+        repo = self._make_repo(self.db_path, max_items_per_tab=500)
+        tab_id = _tab_ids(repo)[0]
+        png = b"\x89PNG\r\n\x1a\n" + b"payload-bytes"
+        parsed = ParsedClipboardItem(
+            item_type="image",
+            display_text="[图片] 1x1",
+            plain_text="",
+            html_text="",
+            image_blob=png,
+            thumb_blob=None,
+            width=1,
+            height=1,
+            file_paths=[],
+            mime_formats=["image/png", "image/bmp"],
+            raw_parts=[
+                {"mime_type": "image/png", "payload_blob": png},
+                {"mime_type": "image/bmp", "payload_blob": b"dib-bytes"},
+            ],
+        )
+        item, created, evicted = repo.insert_parsed_item_ex(
+            tab_id, parsed, captured_at_ms=1000
+        )
+        assert item is not None
+        self.assertTrue(created)
+        self.assertEqual(evicted, [])
+        # 图片的粘贴/导出都读 items.image_blob，原格式副本不该再落库
+        payload = repo.get_item_payload_typed(item.id)
+        assert payload is not None
+        self.assertEqual(payload["raw_parts"], [])
+        self.assertEqual(payload["image_blob"], png)
+        self.assertEqual(repo.get_item_payload(item.id), png)
+
+    def test_search_items_all_tabs_can_run_off_main_thread(self) -> None:
+        """搜索用独立连接，后台线程并发查询时不会和主线程抢同一个连接。"""
+        import threading
+
+        repo = self._make_repo(self.db_path, max_items_per_tab=500)
+        tab_id = _tab_ids(repo)[0]
+        repo.upsert_text_item(tab_id, "后台搜索关键词-alpha")
+        repo.upsert_text_item(tab_id, "无关内容-beta")
+
+        results: list[tuple] = []
+        errors: list[Exception] = []
+        barrier = threading.Barrier(3)
+
+        def search() -> None:
+            try:
+                barrier.wait(timeout=10)
+                rows = repo.search_items_all_tabs("alpha")
+                results.append((threading.get_ident(), [r.text for r in rows]))
+            except Exception as exc:  # noqa: BLE001 - 测试要的就是把异常带回来
+                errors.append(exc)
+
+        def read_tab() -> None:
+            try:
+                barrier.wait(timeout=10)
+                repo.list_items(tab_id)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=search),
+            threading.Thread(target=search),
+            threading.Thread(target=read_tab),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=15)
+            self.assertFalse(thread.is_alive(), "数据库查询线程卡死")
+
+        self.assertEqual(errors, [])
+        self.assertEqual(len(results), 2)
+        for _ident, texts in results:
+            self.assertEqual(texts, ["后台搜索关键词-alpha"])
+
+    def test_vacuum_database_shrinks_file(self) -> None:
+        repo = self._make_repo(self.db_path, max_items_per_tab=1200)
+        tab_id = _tab_ids(repo)[0]
+        filler = "x" * 4096
+        for i in range(1200):
+            repo.upsert_text_item(tab_id, f"{filler}-{i}")
+        self.assertGreater(repo.database_size_bytes(), 1024 * 1024)
+
+        repo.set_tab_capacity(tab_id, 100)
+        deleted = repo.enforce_tab_capacity_now(tab_id)
+        self.assertEqual(deleted, 1100)
+        self.assertEqual(len(repo.list_items(tab_id)), 100)
+
+        before = repo.database_size_bytes()
+        reported_before, reported_after = repo.vacuum_database()
+
+        self.assertEqual(reported_before, before)
+        self.assertEqual(reported_after, repo.database_size_bytes())
+        # 删掉的 1100 条大文本必须真的把空间还回来，而不只是标记删除
+        self.assertLess(reported_after, before - 1024 * 1024)
+        self.assertEqual(repo.stats()["items"], 100)
+
     def test_search_items_all_tabs_hits_multiple_tabs(self) -> None:
         repo = self._make_repo(self.db_path, max_items_per_tab=500)
         tab_ids = _tab_ids(repo)

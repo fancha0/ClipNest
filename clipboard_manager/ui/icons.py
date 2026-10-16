@@ -11,9 +11,24 @@ _STATUS_COLORS = {
     "info": "#3b82c4",
 }
 
+# 图标只按参数画一次，之后直接复用，避免每次开菜单都重新逐笔绘制
+_ICON_CACHE_LIMIT = 256
+_status_icon_cache: dict[tuple[str, int], QIcon] = {}
+_line_icon_cache: dict[tuple[str, str, int], QIcon] = {}
+
+
+def _remember(cache: dict, key: tuple, value: QIcon) -> QIcon:
+    if len(cache) >= _ICON_CACHE_LIMIT:
+        cache.clear()
+    cache[key] = value
+    return value
+
 
 def status_icon(kind: str, size: int = 22) -> QIcon:
     """Filled circular status badge with a check / cross / exclamation glyph."""
+    cached = _status_icon_cache.get((kind, size))
+    if cached is not None:
+        return cached
     pixmap = QPixmap(size, size)
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
@@ -44,11 +59,14 @@ def status_icon(kind: str, size: int = 22) -> QIcon:
         painter.drawEllipse(QPointF(0.5 * s, 0.71 * s), 0.06 * s, 0.06 * s)
 
     painter.end()
-    return QIcon(pixmap)
+    return _remember(_status_icon_cache, (kind, size), QIcon(pixmap))
 
 
 def line_icon(kind: str, color: str = "#5a6a7e", size: int = 16) -> QIcon:
     """Hand-drawn line icons so menus and buttons render consistently."""
+    cached = _line_icon_cache.get((kind, color, size))
+    if cached is not None:
+        return cached
     pixmap = QPixmap(size, size)
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
@@ -192,7 +210,7 @@ def line_icon(kind: str, color: str = "#5a6a7e", size: int = 16) -> QIcon:
         painter.drawEllipse(QRectF(5.0 * s, 5.0 * s, 6.0 * s, 6.0 * s))
 
     painter.end()
-    return QIcon(pixmap)
+    return _remember(_line_icon_cache, (kind, color, size), QIcon(pixmap))
 
 
 def resolved_line_icon(kind: str, is_dark: bool, size: int = 16) -> QIcon:

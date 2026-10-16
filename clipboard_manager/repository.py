@@ -52,7 +52,6 @@ class ClipRepository:
             "i.note",
             "i.display_text",
             "i.plain_text",
-            "i.html_text",
             "i.file_paths_json",
             "i.mime_formats_json",
             "i.pinned",
@@ -70,12 +69,21 @@ class ClipRepository:
         self._initialize()
 
     def _open_connection(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=30.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA synchronous = NORMAL")
         conn.execute("PRAGMA cache_size = -8000")
+        # 多个短连接（导出、读写设置）与长连接并存，给它们等锁时间而不是立刻报
+        # "database is locked"
+        conn.execute("PRAGMA busy_timeout = 5000")
+        # 大库上做全表扫描时直接读内存映射，避免反复 read() 系统调用
+        conn.execute("PRAGMA mmap_size = 268435456")
+        # 排序/分组用内存，不在磁盘上落临时 B-tree
+        conn.execute("PRAGMA temp_store = MEMORY")
+        # 需要跑过一次 VACUUM 才会真正生效；之后删除会释放页而不是只标记
+        conn.execute("PRAGMA auto_vacuum = INCREMENTAL")
         return conn
 
     def _get_conn(self):
@@ -84,7 +92,19 @@ class ClipRepository:
         return self._conn
 
     @contextmanager
-    def _connect(self):
+    def _connect(self, isolated: bool = False):
+        if isolated:
+            # 独立连接：让耗时查询能放进后台线程跑。sqlite3 连接对象不能被两个
+            # 线程同时使用，共用长连接就必须加锁，独立一条最省事也最安全。
+            conn = self._open_connection()
+            try:
+                yield conn
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            return
         conn = self._get_conn()
         try:
             yield conn
@@ -95,6 +115,16 @@ class ClipRepository:
 
     def close(self) -> None:
         if self._conn is not None:
+            # 退出时把 WAL 归并回主库并刷新优化器统计，避免 wal 文件越积越大、
+            # 优化器始终拿不到行数估算
+            try:
+                self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except Exception:
+                pass
+            try:
+                self._conn.execute("PRAGMA optimize")
+            except Exception:
+                pass
             try:
                 self._conn.close()
             except Exception:
@@ -751,6 +781,8 @@ class ClipRepository:
     def clear_all_items(self) -> None:
         with self._connect() as conn:
             conn.execute("DELETE FROM items")
+            # 小批量回收，够清掉常规碎片；整库级的释放交给 vacuum_database()
+            self._reclaim_free_pages(conn, pages=4096)
 
     def list_items(self, tab_id: int) -> list[ClipItem]:
         with self._connect() as conn:
@@ -778,7 +810,7 @@ class ClipRepository:
             safe_limit = 1000
         escaped_query = self._escape_like(clean_query)
         like_pattern = f"%{escaped_query}%"
-        with self._connect() as conn:
+        with self._connect(isolated=True) as conn:
             rows = conn.execute(
                 f"""
                 SELECT
@@ -1006,15 +1038,43 @@ class ClipRepository:
         captured_at_ms: int | None = None,
         note: str = "",
     ) -> Optional[ClipItem]:
-        prepared_parts = self._prepare_mime_parts(parsed.raw_parts)
-        if not prepared_parts:
-            return None
+        item, _created, _deleted = self.insert_parsed_item_ex(
+            tab_id, parsed, captured_at_ms=captured_at_ms, note=note
+        )
+        return item
+
+    def insert_parsed_item_ex(
+        self,
+        tab_id: int,
+        parsed: ParsedClipboardItem,
+        captured_at_ms: int | None = None,
+        note: str = "",
+    ) -> tuple[Optional[ClipItem], bool, list[int]]:
+        """入库并返回 (条目, 是否新建, 因容量被删除的条目 id)。
+
+        created=False 表示命中去重窗口复用了旧行，列表内容没有变化，
+        调用方无需重建 UI。
+        """
+        raw_parts = list(parsed.raw_parts or [])
+        if not raw_parts:
+            return None, False, []
 
         captured_ms = int(captured_at_ms) if captured_at_ms is not None else self._to_epoch_ms(self._now())
         now = datetime.fromtimestamp(captured_ms / 1000.0, tz=timezone.utc).isoformat()
         clean_note = (note or "").strip()
         item_type = str(parsed.item_type)
-        base_hash = f"{item_type}:{self._hash_raw_snapshot(prepared_parts)}"
+        # 图片条目的粘贴/导出/导入全部读 items.image_blob，item_mime_parts 里的
+        # 原格式副本（image/png、image/bmp……）从来没有被读取过，再存一份只会让
+        # 数据库平白翻倍。图片因此不再落原格式副本，其余类型保持原样。
+        if item_type == "image":
+            prepared_parts: list[dict[str, Any]] = []
+            hash_source: list[dict[str, Any]] = raw_parts
+        else:
+            prepared_parts = self._prepare_mime_parts(raw_parts)
+            if not prepared_parts:
+                return None, False, []
+            hash_source = prepared_parts
+        base_hash = f"{item_type}:{self._hash_raw_snapshot(hash_source)}"
         content_hash = f"{base_hash}#{captured_ms}"
         mime_formats_json = json.dumps(parsed.mime_formats or [], ensure_ascii=False)
         file_paths_json = json.dumps(parsed.file_paths or [], ensure_ascii=False)
@@ -1043,7 +1103,7 @@ class ClipRepository:
             if latest_same_payload:
                 latest_ms = self._to_epoch_ms(latest_same_payload["created_at"])
                 if 0 <= captured_ms - latest_ms <= self.RAW_SNAPSHOT_DEDUPE_WINDOW_MS:
-                    return self._to_item(latest_same_payload)
+                    return self._to_item(latest_same_payload), False, []
             sort_order = self._next_item_sort_order(conn, tab_id)
             cursor = conn.execute(
                 """
@@ -1081,8 +1141,9 @@ class ClipRepository:
                 ),
             )
             item_id = int(cursor.lastrowid)
-            self._replace_mime_parts(conn, item_id, prepared_parts)
-            self._enforce_capacity(conn, tab_id)
+            if prepared_parts:
+                self._replace_mime_parts(conn, item_id, prepared_parts)
+            deleted_ids = self._enforce_capacity(conn, tab_id)
             row = conn.execute(
                 """
                 SELECT
@@ -1094,7 +1155,7 @@ class ClipRepository:
                 """,
                 (item_id,),
             ).fetchone()
-            return self._to_item(row)
+            return self._to_item(row), True, deleted_ids
 
     def create_bundle_item(
         self,
@@ -1688,15 +1749,50 @@ class ClipRepository:
     def enforce_tab_capacity_now(self, tab_id: int) -> int:
         """Trim the tab down to its capacity; returns number of deleted items."""
         with self._connect() as conn:
-            return self._enforce_capacity(conn, int(tab_id))
+            return len(self._enforce_capacity(conn, int(tab_id)))
 
-    def _enforce_capacity(self, conn: sqlite3.Connection, tab_id: int) -> int:
+    def database_size_bytes(self) -> int:
+        try:
+            return int(self.db_path.stat().st_size)
+        except OSError:
+            return 0
+
+    def vacuum_database(self) -> tuple[int, int]:
+        """整库压缩，把"只标记删除"的空间真正还给硬盘。
+
+        返回 (压缩前字节数, 压缩后字节数)。VACUUM 本身用独立连接执行：它全程持有
+        排他锁，和应用的长连接互持会直接卡死。
+        """
+        before = self.database_size_bytes()
+        conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=60.0)
+        try:
+            conn.row_factory = sqlite3.Row
+            conn.isolation_level = None  # VACUUM 不能在事务里执行
+            conn.execute("PRAGMA busy_timeout = 60000")
+            # 顺手打开增量自动整理，之后容量裁剪产生的空页才能被持续回收
+            conn.execute("PRAGMA auto_vacuum = INCREMENTAL")
+            conn.execute("VACUUM")
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        # 关键一步：WAL 模式下 VACUUM 的新内容先进 WAL，主文件不会自己变小；
+        # 必须在应用的长连接上做一次 TRUNCATE 检查点，文件才会真正收缩。
+        if self._conn is not None:
+            try:
+                self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except Exception:
+                pass
+        return before, self.database_size_bytes()
+
+    def _enforce_capacity(self, conn: sqlite3.Connection, tab_id: int) -> list[int]:
         limit = self.get_tab_capacity(tab_id)
         count_row = conn.execute("SELECT COUNT(*) AS c FROM items WHERE tab_id = ?", (tab_id,)).fetchone()
         count = int(count_row["c"])
         overflow = count - limit
         if overflow <= 0:
-            return 0
+            return []
         rows = conn.execute(
             """
             SELECT id FROM items
@@ -1707,10 +1803,23 @@ class ClipRepository:
             (tab_id, overflow),
         ).fetchall()
         if not rows:
-            return 0
-        ids = [str(row["id"]) for row in rows]
-        conn.execute(f"DELETE FROM items WHERE id IN ({','.join(ids)})")
-        return len(ids)
+            return []
+        ids = [int(row["id"]) for row in rows]
+        conn.execute(f"DELETE FROM items WHERE id IN ({','.join(str(i) for i in ids)})")
+        self._reclaim_free_pages(conn)
+        return ids
+
+    @staticmethod
+    def _reclaim_free_pages(conn: sqlite3.Connection, pages: int = 128) -> None:
+        """删完顺手把释放出来的页还给系统。
+
+        库只要跑过一次 VACUUM 就进入增量自动整理模式，此后删除才会真正缩文件；
+        没跑过时这条 pragma 是空操作，不会报错。
+        """
+        try:
+            conn.execute("PRAGMA incremental_vacuum(?)", (max(1, int(pages)),))
+        except sqlite3.Error:
+            pass
 
     def _prepare_bundle_images(self, images: list[dict[str, Any]]) -> list[dict[str, Any]]:
         prepared: list[dict[str, Any]] = []

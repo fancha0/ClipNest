@@ -11,6 +11,114 @@ from PySide6.QtGui import QImage
 from ..models import ParsedClipboardItem
 
 
+class ClipboardSnapshot:
+    """QMimeData 的只读副本，供后台解析线程安全使用。
+
+    QClipboard / QMimeData 只允许在 GUI 线程碰，所以"取数据"这一步留在
+    GUI 线程；真正吃 CPU 的解析（全尺寸图片压缩、逐字评分、剥离 HTML
+    正则）交给工作线程。快照本身只含 bytes / str / QImage 这类值对象，
+    跨线程读取是安全的。
+    """
+
+    __slots__ = (
+        "_formats",
+        "_payloads",
+        "_text",
+        "_has_text",
+        "_html",
+        "_has_html",
+        "_image",
+        "_urls",
+        "_has_urls",
+    )
+
+    @classmethod
+    def capture(cls, mime_data, clipboard_text: str = "") -> "ClipboardSnapshot | None":
+        if mime_data is None:
+            return None
+        try:
+            formats = [str(value) for value in mime_data.formats()]
+            payloads = {
+                value: bytes(mime_data.data(value) or b"") for value in formats
+            }
+
+            has_text = bool(mime_data.hasText())
+            text = str(mime_data.text() or "")
+            has_html = bool(mime_data.hasHtml())
+            html = str(mime_data.html() or "")
+
+            has_image = bool(mime_data.hasImage())
+            image = QImage()
+            if has_image:
+                data = mime_data.imageData()
+                if isinstance(data, QImage):
+                    image = data
+                elif data is not None:
+                    try:
+                        image = QImage(data)
+                    except Exception:
+                        image = QImage()
+
+            has_urls = bool(mime_data.hasUrls())
+            urls = list(mime_data.urls()) if has_urls else []
+        except Exception:
+            # 剪贴板可能在读取过程中被别的程序改写，读不到就当作这次没抓到
+            return None
+        return cls(formats, payloads, text, has_text, html, has_html, image, urls, has_urls)
+
+    def __init__(
+        self,
+        formats: list[str],
+        payloads: dict[str, bytes],
+        text: str,
+        has_text: bool,
+        html: str,
+        has_html: bool,
+        image: QImage,
+        urls: list,
+        has_urls: bool,
+    ) -> None:
+        self._formats = list(formats)
+        self._payloads = dict(payloads)
+        self._text = text
+        self._has_text = has_text
+        self._html = html
+        self._has_html = has_html
+        self._image = image
+        self._urls = list(urls)
+        self._has_urls = has_urls
+
+    def formats(self) -> list[str]:
+        return list(self._formats)
+
+    def data(self, mime_type) -> bytes:
+        return self._payloads.get(str(mime_type), b"")
+
+    def hasText(self) -> bool:
+        return self._has_text
+
+    def text(self) -> str:
+        return self._text
+
+    def hasHtml(self) -> bool:
+        return self._has_html
+
+    def html(self) -> str:
+        return self._html
+
+    def hasImage(self) -> bool:
+        return not self._image.isNull()
+
+    def imageData(self) -> QImage:
+        return self._image
+
+    def hasUrls(self) -> bool:
+        return self._has_urls
+
+    def urls(self) -> list:
+        return list(self._urls)
+
+
 class ClipboardContentParser:
     _SAFE_TEXT_CODECS = ("utf-8-sig", "gb18030", "cp936")
     _UTF16_CODECS = ("utf-16", "utf-16le", "utf-16be")
@@ -84,12 +192,14 @@ class ClipboardContentParser:
         if image.isNull():
             return None
 
-        image_blob = self._image_to_png_bytes(image)
+        width = image.width()
+        height = image.height()
+        image_blob = self._reused_png_payload(raw_parts, width, height)
+        if image_blob is None:
+            image_blob = self._image_to_png_bytes(image)
         if image_blob is None:
             return None
         thumb_blob = self._make_thumbnail_blob(image)
-        width = image.width()
-        height = image.height()
         return ParsedClipboardItem(
             item_type="image",
             display_text=f"[图片] {width}x{height}",
@@ -103,6 +213,31 @@ class ClipboardContentParser:
             mime_formats=mime_formats,
             raw_parts=raw_parts,
         )
+
+    @staticmethod
+    def _png_dimensions(payload: bytes) -> tuple[int, int] | None:
+        """只读 PNG 的 IHDR 头取尺寸，不解码整张图。"""
+        if len(payload) < 24 or payload[:8] != b"\x89PNG\r\n\x1a\n":
+            return None
+        if payload[12:16] != b"IHDR":
+            return None
+        return (
+            int.from_bytes(payload[16:20], "big"),
+            int.from_bytes(payload[20:24], "big"),
+        )
+
+    def _reused_png_payload(
+        self, raw_parts: list[dict[str, bytes]], width: int, height: int
+    ) -> bytes | None:
+        """剪贴板里已有的 PNG 原始字节且尺寸一致时直接复用，省掉一次全尺寸压缩。"""
+        for part in raw_parts:
+            mime_type = str(part.get("mime_type") or "").lower()
+            if mime_type not in {"image/png", "png"}:
+                continue
+            payload = bytes(part.get("payload_blob") or b"")
+            if payload and self._png_dimensions(payload) == (width, height):
+                return payload
+        return None
 
     def _parse_files(self, mime_data, mime_formats: list[str], raw_parts: list[dict[str, bytes]]) -> ParsedClipboardItem | None:
         if not mime_data.hasUrls():

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from functools import lru_cache
 from typing import Literal
 
 ThemeMode = Literal["follow_system", "light", "dark"]
@@ -513,6 +514,11 @@ def current_theme_tokens() -> ThemeTokens:
 def build_app_stylesheet(tokens: ThemeTokens) -> str:
     global _LATEST_TOKENS
     _LATEST_TOKENS = tokens
+    return _build_app_stylesheet_cached(tokens)
+
+
+@lru_cache(maxsize=8)
+def _build_app_stylesheet_cached(tokens: ThemeTokens) -> str:
     scroll_v_size = "8px" if tokens.show_scrollbar else "0px"
     scroll_h_size = "8px" if tokens.show_scrollbar else "0px"
     handle_v_min = "32px" if tokens.show_scrollbar else "0px"
@@ -1102,6 +1108,7 @@ def build_app_stylesheet(tokens: ThemeTokens) -> str:
     """
 
 
+@lru_cache(maxsize=8)
 def build_menu_stylesheet(tokens: ThemeTokens) -> str:
     return f"""
         QMenu#glassMenu {{

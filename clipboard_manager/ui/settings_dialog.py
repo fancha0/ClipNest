@@ -115,6 +115,7 @@ class SettingsDialog(ResizableDialog):
     apply_requested = Signal(object)
     check_update_requested = Signal()
     clear_data_requested = Signal()
+    vacuum_database_requested = Signal()
 
     def __init__(
         self,
@@ -627,6 +628,8 @@ class SettingsDialog(ResizableDialog):
 
         open_dir_btn = QPushButton("打开数据目录", page)
         open_dir_btn.clicked.connect(self._open_data_dir)
+        vacuum_btn = QPushButton("压缩数据库…", page)
+        vacuum_btn.clicked.connect(self.vacuum_database_requested.emit)
         clear_btn = QPushButton("清空所有条目", page)
         clear_btn.setObjectName("dangerButton")
         clear_btn.clicked.connect(self.clear_data_requested.emit)
@@ -634,6 +637,13 @@ class SettingsDialog(ResizableDialog):
         manage_section = SettingsSection("数据管理", page)
         manage_section.add_row(
             SettingRow("数据目录", open_dir_btn, "打开存放数据库与日志的文件夹。")
+        )
+        manage_section.add_row(
+            SettingRow(
+                "压缩数据库",
+                vacuum_btn,
+                "把已删除条目占用的空间还给硬盘，大数据库可能需要几分钟。",
+            )
         )
         manage_section.add_row(
             SettingRow(

@@ -3,19 +3,23 @@ from __future__ import annotations
 import time
 import logging
 import os
+import queue
+import threading
 import ctypes
 from ctypes import wintypes
 
 from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtGui import QClipboard
 
-from .clipboard_parser import ClipboardContentParser
+from .clipboard_parser import ClipboardContentParser, ClipboardSnapshot
 
 logger = logging.getLogger(__name__)
 
 
 class ClipboardService(QObject):
     parsed_captured = Signal(object)
+    # 解析在后台线程完成，用信号把结果送回 GUI 线程；单工作线程 + 串行队列保证顺序
+    _parse_finished = Signal(object, object)
     SELF_WRITE_SUPPRESSION_SECONDS = 0.35
     DEFERRED_IMAGE_RETRY_MS = 150
     DEFERRED_IMAGE_MAX_RETRIES = 2
@@ -31,8 +35,69 @@ class ClipboardService(QObject):
         self._capture_timer.setSingleShot(True)
         self._capture_timer.timeout.connect(self._capture_current_clipboard)
         self._parser = ClipboardContentParser()
+        self._parse_queue: queue.Queue = queue.Queue()
+        self._parse_thread: threading.Thread | None = None
+        self._parse_finished.connect(self._on_parse_finished)
         self._clipboard.dataChanged.connect(self._on_data_changed)
 
+    # ------------------------------------------------------------------
+    # 后台解析线程
+    # ------------------------------------------------------------------
+    def _ensure_parse_thread(self) -> None:
+        if self._parse_thread is not None and self._parse_thread.is_alive():
+            return
+        self._parse_thread = threading.Thread(
+            target=self._parse_worker,
+            name="clipnest-clipboard-parse",
+            daemon=True,
+        )
+        self._parse_thread.start()
+
+    def shutdown(self) -> None:
+        if self._parse_thread is not None and self._parse_thread.is_alive():
+            self._parse_queue.put(None)
+
+    def _parse_worker(self) -> None:
+        while True:
+            item = self._parse_queue.get()
+            if item is None:
+                return
+            snapshot, clipboard_text, retry_count, source_app = item
+            try:
+                parsed = self._parser.parse(snapshot, clipboard_text=clipboard_text)
+            except Exception:
+                logger.exception("[Clipboard] parse failed")
+                parsed = None
+            try:
+                self._parse_finished.emit(parsed, (retry_count, source_app))
+            except Exception:
+                logger.debug("[Clipboard] emit parse result failed", exc_info=True)
+                return
+
+    def _on_parse_finished(self, parsed, context) -> None:
+        retry_count, source_app = context
+        if parsed is None:
+            return
+        if self._is_deferred_image(parsed) and retry_count < self.DEFERRED_IMAGE_MAX_RETRIES:
+            current_generation = self._capture_generation
+            logger.info(
+                "[Clipboard] deferred image detected, retry=%s",
+                retry_count + 1,
+            )
+            QTimer.singleShot(
+                self.DEFERRED_IMAGE_RETRY_MS,
+                lambda: self._capture_current_clipboard(
+                    retry_count + 1,
+                    current_generation,
+                ),
+            )
+            return
+        parsed.source_app = source_app
+        self.parsed_captured.emit(parsed)
+
+    # ------------------------------------------------------------------
+    # GUI 线程：只负责取数据
+    # ------------------------------------------------------------------
     def suspend_once_for_text(self, _text: str) -> None:
         self._suspend_self_writes()
 
@@ -70,27 +135,20 @@ class ClipboardService(QObject):
         if mime_data is None:
             return
 
-        parsed = self._parser.parse(mime_data, clipboard_text=self._clipboard.text() or "")
-        if parsed is None:
+        snapshot = ClipboardSnapshot.capture(mime_data)
+        if snapshot is None:
             return
 
-        if self._is_deferred_image(parsed) and retry_count < self.DEFERRED_IMAGE_MAX_RETRIES:
-            current_generation = self._capture_generation
-            logger.info(
-                "[Clipboard] deferred image detected, retry=%s",
-                retry_count + 1,
+        # 压缩图片、逐字评分、剥离 HTML 都交给后台线程，GUI 线程不再卡顿
+        self._ensure_parse_thread()
+        self._parse_queue.put(
+            (
+                snapshot,
+                self._clipboard.text() or "",
+                retry_count,
+                self._pending_source_app,
             )
-            QTimer.singleShot(
-                self.DEFERRED_IMAGE_RETRY_MS,
-                lambda: self._capture_current_clipboard(
-                    retry_count + 1,
-                    current_generation,
-                ),
-            )
-            return
-
-        parsed.source_app = self._pending_source_app
-        self.parsed_captured.emit(parsed)
+        )
 
     @staticmethod
     def _foreground_app_name() -> str | None:

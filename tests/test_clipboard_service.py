@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import time
 import unittest
 import uuid
 from pathlib import Path
@@ -8,7 +9,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QUrl, Signal
 from PySide6.QtGui import QImage
 
-from clipboard_manager.services.clipboard_parser import ClipboardContentParser
+from clipboard_manager.services.clipboard_parser import ClipboardContentParser, ClipboardSnapshot
 from clipboard_manager.services.clipboard_service import ClipboardService
 
 
@@ -20,6 +21,15 @@ class _FakeClipboard(QObject):
 
     def text(self):
         return ""
+
+
+class _FakeClipboardWithContent(_FakeClipboard):
+    def __init__(self, mime) -> None:
+        super().__init__()
+        self._mime = mime
+
+    def mimeData(self):
+        return self._mime
 
 
 class _FakeMimeData:
@@ -256,6 +266,113 @@ class ClipboardParserTests(unittest.TestCase):
         assert parsed is not None
         self.assertEqual(parsed.item_type, "special")
         self.assertEqual(parsed.display_text, "[特殊内容]")
+
+
+    # ------------------------------------------------------------------
+    # 快照 + 后台解析
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _sample_mimes() -> list[_FakeMimeData]:
+        image = QImage(64, 32, QImage.Format.Format_ARGB32)
+        image.fill(0xFF22AA66)
+        html = "<html><body><div>快照一致性</div></body></html>"
+        return [
+            _FakeMimeData(
+                text="一段普通文本 snapshot",
+                parts=[{"mime_type": "text/plain;charset=utf-8", "payload_blob": "一段普通文本 snapshot".encode()}],
+            ),
+            _FakeMimeData(
+                html=html,
+                parts=[{"mime_type": "text/html", "payload_blob": html.encode()}],
+            ),
+            _FakeMimeData(
+                image=image,
+                parts=[{"mime_type": "image/png", "payload_blob": b"\x89PNG\r\n\x1a\n"}],
+            ),
+            _FakeMimeData(
+                text="https://example.com/snapshot",
+                parts=[{"mime_type": "text/plain", "payload_blob": b"https://example.com/snapshot"}],
+            ),
+        ]
+
+    def test_snapshot_round_trips_parse_results(self) -> None:
+        """快照解析结果必须和直接拿 QMimeData 解析完全一致。"""
+        for mime in self._sample_mimes():
+            snapshot = ClipboardSnapshot.capture(mime)
+            self.assertIsNotNone(snapshot)
+            assert snapshot is not None
+            direct = self._parser.parse(mime)
+            via_snapshot = self._parser.parse(snapshot)
+            self.assertIsNotNone(direct)
+            self.assertIsNotNone(via_snapshot)
+            assert direct is not None and via_snapshot is not None
+            self.assertEqual(via_snapshot.item_type, direct.item_type)
+            self.assertEqual(via_snapshot.display_text, direct.display_text)
+            self.assertEqual(via_snapshot.plain_text, direct.plain_text)
+            self.assertEqual(via_snapshot.image_blob, direct.image_blob)
+            self.assertEqual(via_snapshot.raw_parts, direct.raw_parts)
+
+    def test_capture_enqueues_snapshot_for_background_parse(self) -> None:
+        """GUI 线程只负责把数据入队，真正的解析交给后台线程。"""
+        mime = _FakeMimeData(
+            text="后台线程解析",
+            parts=[{"mime_type": "text/plain", "payload_blob": "后台线程解析".encode()}],
+        )
+        service = ClipboardService(_FakeClipboardWithContent(mime))
+        captured: list[object] = []
+        service.parsed_captured.connect(captured.append)
+        try:
+            service._capture_current_clipboard()
+            # 入队了但主线程还没解析过
+            self.assertEqual(service._parse_queue.qsize(), 1)
+            self.assertEqual(captured, [])
+
+            deadline = time.monotonic() + 5.0
+            while service._parse_queue.qsize() > 0 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertEqual(service._parse_queue.qsize(), 0, "后台线程没有消费解析队列")
+        finally:
+            service.shutdown()
+
+    def test_capture_pipeline_emits_parsed_captured(self) -> None:
+        class _SyncOnlyService(ClipboardService):
+            """不开后台线程，由主线程同步跑一遍解析队列，方便确定性断言。"""
+
+            def _ensure_parse_thread(self) -> None:
+                return
+
+        mime = _FakeMimeData(
+            text="管线验证",
+            parts=[{"mime_type": "text/plain", "payload_blob": "管线验证".encode()}],
+        )
+        service = _SyncOnlyService(_FakeClipboardWithContent(mime))
+        captured: list[object] = []
+        service.parsed_captured.connect(captured.append)
+
+        service._pending_source_app = "notepad.exe"
+        service._capture_current_clipboard()
+        self.assertEqual(service._parse_queue.qsize(), 1)
+        self.assertEqual(captured, [])
+
+        service._parse_queue.put(None)
+        service._parse_worker()
+
+        self.assertEqual(len(captured), 1)
+        parsed = captured[0]
+        self.assertEqual(parsed.item_type, "text")
+        self.assertEqual(parsed.source_app, "notepad.exe")
+
+    def test_deferred_image_result_is_not_captured_immediately(self) -> None:
+        service = ClipboardService(_FakeClipboard())
+        captured: list[object] = []
+        service.parsed_captured.connect(captured.append)
+        parsed = type("Parsed", (), {
+            "item_type": "special",
+            "mime_formats": ["application/x-qt-image"],
+            "source_app": None,
+        })()
+        service._on_parse_finished(parsed, (0, None))
+        self.assertEqual(captured, [])
 
 
 if __name__ == "__main__":

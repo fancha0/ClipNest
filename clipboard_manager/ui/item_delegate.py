@@ -9,6 +9,10 @@ from PySide6.QtWidgets import QStyledItemDelegate, QStyle, QStyleOptionViewItem
 from .theme import ThemeTokens, default_light_business_theme
 
 
+# 主题色字符串 -> QColor，渲染热路径上避免反复跑正则
+_TOKEN_COLOR_CACHE: dict[tuple[str, int], QColor] = {}
+
+
 class ClipItemDelegate(QStyledItemDelegate):
     # Pinned cards get a clean accent tint (blend, not lighter()) plus an accent border.
     _PINNED_TINT_RATIO = 0.16
@@ -564,6 +568,19 @@ class ClipItemDelegate(QStyledItemDelegate):
     @staticmethod
     def _parse_token_color(token: str, fallback: QColor) -> QColor:
         text = (token or "").strip()
+        # 每行绘制会调用十来次，颜色种类其实很少，缓存掉重复的正则解析
+        cache_key = (text, int(fallback.rgba()))
+        cached = _TOKEN_COLOR_CACHE.get(cache_key)
+        if cached is not None:
+            return QColor(cached)
+        resolved = ClipItemDelegate._resolve_token_color(text, fallback)
+        if len(_TOKEN_COLOR_CACHE) >= 512:
+            _TOKEN_COLOR_CACHE.clear()
+        _TOKEN_COLOR_CACHE[cache_key] = QColor(resolved)
+        return resolved
+
+    @staticmethod
+    def _resolve_token_color(text: str, fallback: QColor) -> QColor:
         if text == "":
             return QColor(fallback)
 

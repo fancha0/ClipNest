@@ -45,6 +45,43 @@ class _ExportSignals(QObject):
     failed = Signal(str)
 
 
+class _VacuumSignals(QObject):
+    # AppController 不是 QObject，后台线程要回传结果只能借这个信号载体
+    finished = Signal(int, int, str)
+
+
+class _SearchSignals(QObject):
+    # (代次, 关键词, 结果, 标签名映射)；代次不一致的过期结果会被直接丢弃
+    finished = Signal(int, str, object, object)
+
+
+class _SearchTask(QRunnable):
+    def __init__(self, repository, query, limit, tab_name_map, generation, signals) -> None:
+        super().__init__()
+        self._repository = repository
+        self._query = query
+        self._limit = limit
+        self._tab_name_map = tab_name_map
+        self._generation = generation
+        self._signals = signals
+
+    def run(self) -> None:
+        try:
+            items = self._repository.search_items_all_tabs(self._query, limit=self._limit)
+        except Exception:
+            logger.exception("[Search] background search failed")
+            items = []
+        try:
+            self._signals.finished.emit(
+                self._generation,
+                self._query,
+                items,
+                self._tab_name_map,
+            )
+        except Exception:
+            logger.debug("[Search] emit result failed", exc_info=True)
+
+
 class _ExportTask(QRunnable):
     def __init__(self, repository, tab_ids, path, signals) -> None:
         super().__init__()
@@ -101,6 +138,12 @@ class AppController:
         self._auto_check_update = True
         self._diagnostic_logging = True
         self._capture_enabled = True
+        self._vacuum_signals = _VacuumSignals()
+        self._vacuum_running = False
+        self._maintenance_mode = False
+        self._search_signals = _SearchSignals()
+        self._search_generation = 0
+        self._search_started_at = 0.0
         self._update_check_silent = False
         self._pending_focus_target: Optional[FocusTarget] = None
         self._auto_hide_on_paste = AUTO_HIDE_ON_PASTE
@@ -218,6 +261,10 @@ class AppController:
         self._hotkey_service.stop()
         self._capture_hotkey_service.stop()
         try:
+            self._clipboard_service.shutdown()
+        except Exception:
+            logger.debug("[Clipboard] shutdown failed", exc_info=True)
+        try:
             self._repository.set_setting("dialog_sizes", dump_dialog_sizes_to_setting())
         except Exception:
             logger.exception("[UI] save dialog sizes failed")
@@ -234,6 +281,9 @@ class AppController:
         self._window.capture_enabled_changed.connect(self._on_capture_enabled_changed)
         self._capture_hotkey_service.hotkey_pressed.connect(self._on_capture_hotkey_pressed)
         self._window.clear_all_data_requested.connect(self._on_clear_all_data)
+        self._window.vacuum_database_requested.connect(self._on_vacuum_database_requested)
+        self._vacuum_signals.finished.connect(self._on_vacuum_finished)
+        self._search_signals.finished.connect(self._on_search_finished)
 
         self._window.tab_selected.connect(self._on_tab_selected)
         self._window.tab_order_changed.connect(self._on_tab_order_changed)
@@ -467,6 +517,42 @@ class AppController:
         self._refresh_tabs()
         self._window.show_info("已清空所有条目。")
         self._window.refresh_settings_data_stats()
+
+    def _on_vacuum_database_requested(self) -> None:
+        if self._vacuum_running:
+            return
+        ok = self._window.confirm(
+            "压缩数据库",
+            "整理数据库，并把已删除条目占用的空间真正还给硬盘。\n"
+            "数据库较大时可能需要几分钟，期间请不要复制内容。是否继续？",
+            confirm_text="压缩",
+            destructive=False,
+        )
+        if not ok:
+            return
+        self._vacuum_running = True
+        self._maintenance_mode = True
+        self._window.show_vacuum_progress()
+
+        def work() -> None:
+            try:
+                before, after = self._repository.vacuum_database()
+            except Exception as exc:  # noqa: BLE001 - 后台线程必须把错误带回主线程
+                logger.exception("[Data] vacuum failed")
+                self._vacuum_signals.finished.emit(0, 0, str(exc))
+            else:
+                self._vacuum_signals.finished.emit(int(before), int(after), "")
+
+        threading.Thread(target=work, name="clipnest-vacuum", daemon=True).start()
+
+    def _on_vacuum_finished(self, before: int, after: int, error: str) -> None:
+        self._vacuum_running = False
+        self._maintenance_mode = False
+        self._window.finish_vacuum_progress(before, after, error)
+        if not error:
+            self._items_cache.clear()
+            self._refresh_tabs()
+            self._window.refresh_settings_data_stats()
 
     def _on_autostart_change_requested(self, enabled: bool) -> None:
         error = self._autostart_service.set_enabled(enabled)
@@ -947,19 +1033,24 @@ class AppController:
         self._pending_focus_target = None
 
     def _on_clipboard_parsed_captured(self, parsed: ParsedClipboardItem) -> None:
+        if self._maintenance_mode:
+            # 数据库整理期间写入会一直等锁，直接丢弃这次抓取
+            logger.debug("[Capture] skipped during database maintenance")
+            return
         if not self._capture_enabled:
             return
-        logger.info(
-            "[Capture] parsed type=%s formats=%s sizes=%s",
-            parsed.item_type,
-            parsed.mime_formats,
-            [
-                len(bytes(part.get("payload_blob", b"")))
-                for part in (parsed.raw_parts or [])
-            ],
-        )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "[Capture] parsed type=%s formats=%s sizes=%s",
+                parsed.item_type,
+                parsed.mime_formats,
+                [
+                    len(bytes(part.get("payload_blob", b"")))
+                    for part in (parsed.raw_parts or [])
+                ],
+            )
         if self._is_redundant_clipboard_capture(parsed):
-            logger.info("[Capture] skip redundant special capture")
+            logger.debug("[Capture] skip redundant special capture")
             return
         tab_id = self._capture_tab_id
         if tab_id is None:
@@ -970,18 +1061,28 @@ class AppController:
             self._capture_tab_id = tab_id
             self._repository.set_setting("capture_tab_id", str(tab_id))
             self._window.set_capture_tab(tab_id, self._tab_name(tabs, tab_id))
-        inserted = self._repository.insert_parsed_item(tab_id, parsed)
+        inserted, created, deleted_ids = self._repository.insert_parsed_item_ex(tab_id, parsed)
         if inserted is None:
             return
+        if not created:
+            logger.debug("[Capture] dedupe hit, skip refresh id=%s", getattr(inserted, "id", None))
+            return
+        self._invalidate_items_cache(tab_id)
         current_tab_id = self._window.current_tab_id()
         if self._search_query:
-            self._invalidate_items_cache(tab_id)
             self._refresh_items(current_tab_id or tab_id)
-        elif current_tab_id == tab_id:
-            self._invalidate_items_cache(tab_id)
+            return
+        if (
+            current_tab_id == tab_id
+            and self._window.isVisible()
+            and not self._pending_items_refresh
+            and self._window.prepend_item(inserted, deleted_ids)
+        ):
+            self._schedule_rich_prewarm([inserted])
+            logger.debug("[Capture] incremental prepend id=%s", inserted.id)
+            return
+        if current_tab_id == tab_id:
             self._refresh_items(tab_id)
-        else:
-            self._invalidate_items_cache(tab_id)
 
     def _is_redundant_clipboard_capture(self, parsed: ParsedClipboardItem) -> bool:
         """跳过延迟渲染导致的重复抓取。
@@ -1021,12 +1122,12 @@ class AppController:
             and age <= 3.0
             and virtual_file_formats.issubset(current_formats)
         ):
-            logger.info(
+            logger.debug(
                 "[Capture] skip screenshot virtual-file follow-up age=%.3fs",
                 age,
             )
             return True
-        logger.info(
+        logger.debug(
             "[Capture] redundant-check type=%s age=%.3fs current=%s last=%s subset=%s",
             parsed.item_type,
             age,
@@ -1435,6 +1536,9 @@ class AppController:
         self._window.set_capture_tab(self._capture_tab_id, self._tab_name(tabs, self._capture_tab_id))
 
     def _refresh_items(self, tab_id: Optional[int]) -> None:
+        # 每次刷新都推进代次，让还在后台跑的搜索结果全部过期
+        self._search_generation += 1
+        generation = self._search_generation
         if not self._window.isVisible():
             self._pending_items_refresh = True
             self._pending_items_refresh_tab = tab_id
@@ -1452,17 +1556,25 @@ class AppController:
         )
         try:
             if self._search_query:
-                started = time.perf_counter()
-                items = self._repository.search_items_all_tabs(self._search_query, limit=1000)
+                # 搜索是全表扫描，放进后台线程，打字时界面不再卡住
+                query = self._search_query
                 tabs = self._repository.list_tabs()
-                load_ms = (time.perf_counter() - started) * 1000
                 tab_name_map = {tab.id: tab.name for tab in tabs}
-                self._window.set_items(items, search_mode=True, tab_name_map=tab_name_map)
-                self._schedule_rich_prewarm(items)
-                logger.info(
-                    "[Perf] refresh_items search items=%s load_ms=%.1f cache_hit=False",
-                    len(items),
-                    load_ms,
+                self._search_started_at = time.perf_counter()
+                QThreadPool.globalInstance().start(
+                    _SearchTask(
+                        self._repository,
+                        query,
+                        1000,
+                        tab_name_map,
+                        generation,
+                        self._search_signals,
+                    )
+                )
+                logger.debug(
+                    "[UI] refresh_items search dispatched gen=%s query=%s",
+                    generation,
+                    query,
                 )
                 return
             if tab_id is None:
@@ -1483,7 +1595,7 @@ class AppController:
                 cache_hit = True
             self._window.set_items(items, search_mode=False, tab_name_map=None)
             self._schedule_rich_prewarm(items)
-            logger.info(
+            logger.debug(
                 "[Perf] refresh_items tab_id=%s items=%s cache_hit=%s load_ms=%.1f",
                 tab_id,
                 len(items),
@@ -1496,6 +1608,35 @@ class AppController:
                 tab_id,
                 bool(self._search_query),
             )
+
+    def _on_search_finished(
+        self,
+        generation: int,
+        query: str,
+        items: list,
+        tab_name_map: dict,
+    ) -> None:
+        # 代次或关键词对不上，说明期间又刷新/清空过搜索，丢弃过期结果
+        if generation != self._search_generation or query != self._search_query:
+            logger.debug(
+                "[UI] search result dropped gen=%s/%s query=%r/%r",
+                generation,
+                self._search_generation,
+                query,
+                self._search_query,
+            )
+            return
+        try:
+            self._window.set_items(list(items), search_mode=True, tab_name_map=dict(tab_name_map))
+            self._schedule_rich_prewarm(items)
+        except Exception:
+            logger.exception("[UI] apply search result failed")
+            return
+        logger.debug(
+            "[Perf] search applied items=%s ms=%.1f",
+            len(items),
+            (time.perf_counter() - self._search_started_at) * 1000,
+        )
 
     def _on_window_shown(self) -> None:
         if not self._pending_items_refresh:
