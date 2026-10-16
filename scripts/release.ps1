@@ -14,6 +14,21 @@
 
 $ErrorActionPreference = "Stop"
 
+# PowerShell 5.1 会把原生命令（git / scp / PyInstaller / ISCC）写到 stderr 的
+# 正常进度输出当成 NativeCommandError，配合上面的 EAP=Stop 会直接中断发版。
+# 凡是调用原生命令都走这个包装器，临时放开 EAP 后再按退出码判断成败。
+function Invoke-NativeCommand {
+    param([scriptblock]$Action)
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $Action
+        return $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+}
+
 $root = Resolve-Path (Join-Path $PSScriptRoot "..")
 $pythonPath = Join-Path $root ".venv\Scripts\python.exe"
 $tag = "v$Version"
@@ -29,17 +44,9 @@ try {
     Write-Output "==> 2/5 打包（先结束运行中的 ClipNest）"
     cmd /c "taskkill /F /IM ClipNest.exe >nul 2>&1"
     Start-Sleep -Seconds 2
-    # PyInstaller 把 INFO 日志写到 stderr，PowerShell 5.1 会当成 NativeCommandError，
-    # 配合上面的 EAP=Stop 会直接中断整个发版流程，所以这里临时放开
-    $previousEap = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
-    try {
-        & $pythonPath -m PyInstaller --noconfirm --clean ClipNest.spec
-        $buildExitCode = $LASTEXITCODE
-    } finally {
-        $ErrorActionPreference = $previousEap
+    if ((Invoke-NativeCommand { & $pythonPath -m PyInstaller --noconfirm --clean ClipNest.spec }) -ne 0) {
+        throw "PyInstaller build failed."
     }
-    if ($buildExitCode -ne 0) { throw "PyInstaller build failed." }
 
     $exePath = Join-Path $root "dist\ClipNest\ClipNest.exe"
     if (-not (Test-Path -LiteralPath $exePath)) { throw "EXE not found: $exePath" }
@@ -55,15 +62,9 @@ try {
     $setupPath = Join-Path $root "dist\ClipNest-Setup.exe"
     if (Test-Path -LiteralPath $InnoSetup) {
         Write-Output "==> 3b/5 编译安装包（Inno Setup）"
-        $previousEap = $ErrorActionPreference
-        $ErrorActionPreference = "Continue"
-        try {
-            & $InnoSetup (Join-Path $root "installer\clipnest.iss") "/DMyAppVersion=$Version" | Out-Null
-            $isccExitCode = $LASTEXITCODE
-        } finally {
-            $ErrorActionPreference = $previousEap
+        if ((Invoke-NativeCommand { & $InnoSetup (Join-Path $root "installer\clipnest.iss") "/DMyAppVersion=$Version" | Out-Null }) -ne 0) {
+            throw "Inno Setup 编译安装包失败"
         }
-        if ($isccExitCode -ne 0) { throw "Inno Setup 编译安装包失败" }
         $setupMb = [math]::Round((Get-Item $setupPath).Length / 1MB, 1)
         Write-Output "    安装包：$setupPath ($setupMb MB)"
     } else {
@@ -73,10 +74,18 @@ try {
 
     Write-Output "==> 4/5 提交并推送 tag $tag"
     git add clipboard_manager/version.py
-    git commit -m "chore: release $tag" --allow-empty
-    git tag $tag
-    git push origin HEAD
-    git push origin $tag
+    if ((Invoke-NativeCommand { git commit -m "chore: release $tag" --allow-empty }) -ne 0) {
+        throw "git commit 失败"
+    }
+    if ((Invoke-NativeCommand { git tag $tag }) -ne 0) {
+        throw "git tag 失败（该 tag 是否已存在？）"
+    }
+    if ((Invoke-NativeCommand { git push origin HEAD }) -ne 0) {
+        throw "git push 分支失败"
+    }
+    if ((Invoke-NativeCommand { git push origin $tag }) -ne 0) {
+        throw "git push tag 失败"
+    }
 
     Write-Output "==> 5/5 发布更新"
     $releaseBody = if ($Notes) { $Notes } else { "Release $tag" }
@@ -95,15 +104,19 @@ try {
         } | ConvertTo-Json
         [System.IO.File]::WriteAllText($manifestPath, $manifest, (New-Object System.Text.UTF8Encoding($false)))
 
-        ssh -p $SshPort $SshTarget "mkdir -p $RemoteDir"
-        if ($LASTEXITCODE -ne 0) { throw "SSH 连接失败：$SshTarget" }
-        scp -P $SshPort $zipPath "${SshTarget}:${RemoteDir}/ClipNest-Windows.zip"
-        if ($LASTEXITCODE -ne 0) { throw "上传更新包失败" }
-        scp -P $SshPort $manifestPath "${SshTarget}:${RemoteDir}/latest.json"
-        if ($LASTEXITCODE -ne 0) { throw "上传更新清单失败" }
+        if ((Invoke-NativeCommand { ssh -p $SshPort $SshTarget "mkdir -p $RemoteDir" }) -ne 0) {
+            throw "SSH 连接失败：$SshTarget"
+        }
+        if ((Invoke-NativeCommand { scp -P $SshPort $zipPath "${SshTarget}:${RemoteDir}/ClipNest-Windows.zip" }) -ne 0) {
+            throw "上传更新包失败"
+        }
+        if ((Invoke-NativeCommand { scp -P $SshPort $manifestPath "${SshTarget}:${RemoteDir}/latest.json" }) -ne 0) {
+            throw "上传更新清单失败"
+        }
         if ($setupPath -and (Test-Path -LiteralPath $setupPath)) {
-            scp -P $SshPort $setupPath "${SshTarget}:${RemoteDir}/ClipNest-Setup.exe"
-            if ($LASTEXITCODE -ne 0) { throw "上传安装包失败" }
+            if ((Invoke-NativeCommand { scp -P $SshPort $setupPath "${SshTarget}:${RemoteDir}/ClipNest-Setup.exe" }) -ne 0) {
+                throw "上传安装包失败"
+            }
             Write-Output "    安装包地址：$PublicBaseUrl/ClipNest-Setup.exe"
         }
         Write-Output "    已上传：${SshTarget}:${RemoteDir}"
