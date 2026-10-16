@@ -29,8 +29,17 @@ try {
     Write-Output "==> 2/5 打包（先结束运行中的 ClipNest）"
     cmd /c "taskkill /F /IM ClipNest.exe >nul 2>&1"
     Start-Sleep -Seconds 2
-    & $pythonPath -m PyInstaller --noconfirm --clean ClipNest.spec
-    if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed." }
+    # PyInstaller 把 INFO 日志写到 stderr，PowerShell 5.1 会当成 NativeCommandError，
+    # 配合上面的 EAP=Stop 会直接中断整个发版流程，所以这里临时放开
+    $previousEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $pythonPath -m PyInstaller --noconfirm --clean ClipNest.spec
+        $buildExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousEap
+    }
+    if ($buildExitCode -ne 0) { throw "PyInstaller build failed." }
 
     $exePath = Join-Path $root "dist\ClipNest\ClipNest.exe"
     if (-not (Test-Path -LiteralPath $exePath)) { throw "EXE not found: $exePath" }
@@ -46,8 +55,15 @@ try {
     $setupPath = Join-Path $root "dist\ClipNest-Setup.exe"
     if (Test-Path -LiteralPath $InnoSetup) {
         Write-Output "==> 3b/5 编译安装包（Inno Setup）"
-        & $InnoSetup (Join-Path $root "installer\clipnest.iss") "/DMyAppVersion=$Version" | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "Inno Setup 编译安装包失败" }
+        $previousEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            & $InnoSetup (Join-Path $root "installer\clipnest.iss") "/DMyAppVersion=$Version" | Out-Null
+            $isccExitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousEap
+        }
+        if ($isccExitCode -ne 0) { throw "Inno Setup 编译安装包失败" }
         $setupMb = [math]::Round((Get-Item $setupPath).Length / 1MB, 1)
         Write-Output "    安装包：$setupPath ($setupMb MB)"
     } else {
