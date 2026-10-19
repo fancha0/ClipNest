@@ -35,6 +35,11 @@ $tag = "v$Version"
 
 Push-Location $root
 try {
+    # Build only committed sources so the release tag reproduces the package.
+    $worktreeStatus = git status --porcelain --untracked-files=normal
+    if ($LASTEXITCODE -ne 0) { throw "Cannot inspect Git worktree." }
+    if ($worktreeStatus) { throw "Commit or stash worktree changes before releasing." }
+
     Write-Output "==> 1/5 写入版本号 $Version"
     [System.IO.File]::WriteAllText(
         (Join-Path $root "clipboard_manager\version.py"),

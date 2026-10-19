@@ -86,6 +86,11 @@ class UpdaterBatTests(unittest.TestCase):
         self.assertIn("/R:2", bat)
         self.assertIn('start "" "C:\\apps\\ClipNest\\ClipNest.exe"', bat)
         self.assertIn('del "%~f0"', bat)
+        self.assertIn('if errorlevel 8 goto update_failed', bat)
+        self.assertLess(bat.index('if errorlevel 8'), bat.index('start ""'))
+        failure_branch = bat.split(':update_failed\r\n', 1)[1]
+        self.assertNotIn('start ""', failure_branch)
+        self.assertIn('exit /b 1', failure_branch)
 
 
 class UpdateArchiveValidationTests(unittest.TestCase):

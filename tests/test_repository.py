@@ -42,6 +42,25 @@ class ClipRepositoryTests(unittest.TestCase):
         self.assertEqual(stats["items"], 2)
         self.assertGreaterEqual(stats["db_bytes"], 0)
 
+    def test_incremental_vacuum_reclaims_free_pages(self) -> None:
+        import sqlite3
+
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.execute("PRAGMA auto_vacuum = INCREMENTAL")
+            conn.execute("CREATE TABLE reclaim_test(payload BLOB)")
+            conn.execute("INSERT INTO reclaim_test VALUES (zeroblob(262144))")
+            conn.commit()
+            conn.execute("DELETE FROM reclaim_test")
+            conn.commit()
+            before = conn.execute("PRAGMA freelist_count").fetchone()[0]
+            self.assertGreater(before, 0)
+            ClipRepository._reclaim_free_pages(conn)
+            after = conn.execute("PRAGMA freelist_count").fetchone()[0]
+            self.assertLess(after, before)
+        finally:
+            conn.close()
+
     def test_clear_all_items_keeps_tabs(self) -> None:
         repo = self._make_repo(self.db_path, max_items_per_tab=500)
         tab_ids = _tab_ids(repo)

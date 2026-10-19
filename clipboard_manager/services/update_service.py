@@ -153,8 +153,14 @@ def build_updater_bat(source_dir: str, install_dir: str, exe_name: str) -> str:
         "chcp 65001 >nul\r\n"
         "timeout /t 2 /nobreak >nul\r\n"
         f'robocopy "{source_dir}" "{install_dir}" /E /NFL /NDL /NJH /NJS /NP /R:2 /W:2\r\n'
+        'if errorlevel 8 goto update_failed\r\n'
         f'start "" "{install_dir}\\{exe_name}"\r\n'
         '(goto) 2>nul & del "%~f0"\r\n'
+        ':update_failed\r\n'
+        'echo ClipNest update failed. Files may be locked or the install directory may not be writable.\r\n'
+        'echo Extracted update files: "%~dp0"\r\n'
+        'pause\r\n'
+        'exit /b 1\r\n'
     )
 
 
@@ -356,7 +362,7 @@ class UpdateService(QObject):
                 bat_file.write(bat_content)
             subprocess.Popen(
                 ["cmd", "/c", bat_path],
-                creationflags=0x08000000,
+                creationflags=subprocess.CREATE_NEW_CONSOLE,
                 close_fds=True,
             )
         except Exception as exc:

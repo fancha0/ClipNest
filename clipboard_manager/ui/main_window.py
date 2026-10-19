@@ -139,10 +139,12 @@ class DragAutoScrollListWidget(QListWidget):
         self._auto_scroll_timer.timeout.connect(self._perform_drag_auto_scroll)
         self.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self._reorder_enabled = True
-        self._drag_source_row: Optional[int] = None
+        self._drag_source_id: Optional[int] = None
+        self._drop_insert_row: Optional[int] = None
+        self._last_drag_point: Optional[QPoint] = None
         self.setDragEnabled(True)
         self.setAcceptDrops(True)
-        self.setDropIndicatorShown(True)
+        self.setDropIndicatorShown(False)
         self.setDragDropOverwriteMode(False)
         self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self.setDefaultDropAction(Qt.DropAction.MoveAction)
@@ -151,9 +153,10 @@ class DragAutoScrollListWidget(QListWidget):
         self._reorder_enabled = bool(enabled)
         self.setDragEnabled(self._reorder_enabled)
         self.setAcceptDrops(self._reorder_enabled)
-        self.setDropIndicatorShown(self._reorder_enabled)
+        self.setDropIndicatorShown(False)
         if not self._reorder_enabled:
             self._stop_drag_auto_scroll()
+            self._clear_drop_indicator()
 
     def startDrag(self, supported_actions: Qt.DropAction) -> None:
         if not self._reorder_enabled:
@@ -167,7 +170,7 @@ class DragAutoScrollListWidget(QListWidget):
         mime_data = self.model().mimeData(indexes)
         if mime_data is None:
             return
-        self._drag_source_row = source_row
+        self._drag_source_id = self.item(source_row).data(ITEM_ID_ROLE)
         # 不使用 QListWidget.startDrag：它在 MoveAction 拖拽结束后会按
         # 自身语义删除源行。这里完全自管，仅提供 CopyAction。
         drag = QDrag(self)
@@ -179,7 +182,8 @@ class DragAutoScrollListWidget(QListWidget):
             drag.exec(Qt.DropAction.CopyAction, Qt.DropAction.CopyAction)
         finally:
             self._stop_drag_auto_scroll()
-            self._drag_source_row = None
+            self._drag_source_id = None
+            self._clear_drop_indicator()
 
     def dragEnterEvent(self, event) -> None:
         super().dragEnterEvent(event)
@@ -193,25 +197,28 @@ class DragAutoScrollListWidget(QListWidget):
         super().dragMoveEvent(event)
         if self._reorder_enabled and event.source() is self:
             self._update_drag_auto_scroll(event.position().toPoint().y())
+            self._last_drag_point = event.position().toPoint()
+            self._drop_insert_row = self._resolve_drop_row(event)
+            self.viewport().update()
             event.acceptProposedAction()
         else:
             self._stop_drag_auto_scroll()
+            self._clear_drop_indicator()
 
     def dragLeaveEvent(self, event) -> None:
         self._stop_drag_auto_scroll()
+        self._clear_drop_indicator()
         super().dragLeaveEvent(event)
 
     def dropEvent(self, event) -> None:
         self._stop_drag_auto_scroll()
         if not self._reorder_enabled or event.source() is not self:
+            self._clear_drop_indicator()
             return super().dropEvent(event)
 
-        from_row = (
-            self._drag_source_row
-            if self._drag_source_row is not None
-            else self.currentRow()
-        )
+        from_row = self._resolve_drag_source_row()
         drop_row = self._resolve_drop_row(event)
+        self._clear_drop_indicator()
         if 0 <= from_row < self.count():
             if self._move_row(from_row, drop_row):
                 self.rows_manually_reordered.emit()
@@ -222,6 +229,9 @@ class DragAutoScrollListWidget(QListWidget):
 
     def _move_row(self, from_row: int, drop_row: int) -> bool:
         """手动完成移动；相邻或原地返回 False。模型操作显式可控，不会丢项。"""
+        if not 0 <= from_row < self.count():
+            return False
+        drop_row = self._constrain_drop_row(from_row, drop_row)
         if drop_row < 0:
             drop_row = 0
         if drop_row > self.count():
@@ -239,25 +249,80 @@ class DragAutoScrollListWidget(QListWidget):
         return True
 
     def _resolve_drop_row(self, event) -> int:
+        return self._drop_row_for_point(event.position().toPoint())
+
+    def _drop_row_for_point(self, point: QPoint) -> int:
+        row = self._unconstrained_drop_row_for_point(point)
+        return self._constrain_drop_row(self._resolve_drag_source_row(), row)
+
+    def _resolve_drag_source_row(self) -> int:
+        if self._drag_source_id is not None:
+            for row in range(self.count()):
+                if self.item(row).data(ITEM_ID_ROLE) == self._drag_source_id:
+                    return row
+            # The source may have been removed by capacity trimming during drag.
+            return -1
+        return self.currentRow()
+
+    def _constrain_drop_row(self, from_row: int, drop_row: int) -> int:
+        return drop_row
+
+    def _unconstrained_drop_row_for_point(self, point: QPoint) -> int:
         if self.count() == 0:
             return 0
-        point = event.position().toPoint()
         target_item = self.itemAt(point)
-        indicator = self.dropIndicatorPosition()
+        if target_item is not None:
+            target_row = self.row(target_item)
+            rect = self.visualItemRect(target_item)
+            return target_row + 1 if point.y() >= rect.center().y() else target_row
 
-        if target_item is None:
-            return self.count()
+        # In row spacing, use the next row's upper edge. Blank space after the
+        # final row appends; blank space before the first row prepends.
+        for row in range(self.count()):
+            rect = self.visualItemRect(self.item(row))
+            if rect.isValid() and point.y() < rect.center().y():
+                return row
+        return self.count()
 
-        target_row = self.row(target_item)
-        if indicator == QAbstractItemView.DropIndicatorPosition.AboveItem:
-            return target_row
-        if indicator == QAbstractItemView.DropIndicatorPosition.BelowItem:
-            return target_row + 1
-        if indicator == QAbstractItemView.DropIndicatorPosition.OnViewport:
-            return self.count()
+    def _clear_drop_indicator(self) -> None:
+        if self._drop_insert_row is None:
+            return
+        self._drop_insert_row = None
+        self._last_drag_point = None
+        self.viewport().update()
 
-        rect = self.visualItemRect(target_item)
-        return target_row + 1 if point.y() >= rect.center().y() else target_row
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        row = self._drop_insert_row
+        if row is None or self.count() == 0:
+            return
+
+        if row >= self.count():
+            item = self.item(self.count() - 1)
+            rect = self.visualItemRect(item)
+            y = rect.bottom()
+        else:
+            item = self.item(max(0, row))
+            rect = self.visualItemRect(item)
+            y = rect.top()
+        if not rect.isValid() or y < 0 or y >= self.viewport().height():
+            return
+
+        painter = QPainter(self.viewport())
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        left = max(4, rect.left() + 8)
+        right = min(self.viewport().width() - 4, rect.right() - 8)
+        if right > left:
+            # 白色描边让黑色插入线在深色卡片上也保持清晰。
+            outline = QPen(QColor(255, 255, 255, 220), 6)
+            outline.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(outline)
+            painter.drawLine(QPoint(left, y), QPoint(right, y))
+            pen = QPen(QColor(16, 18, 22), 3)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(pen)
+            painter.drawLine(QPoint(left, y), QPoint(right, y))
+        painter.end()
 
     def _update_drag_auto_scroll(self, y: int) -> None:
         viewport_h = max(1, self.viewport().height())
@@ -300,6 +365,8 @@ class DragAutoScrollListWidget(QListWidget):
             self._stop_drag_auto_scroll()
             return
         scrollbar.setValue(target)
+        if self._last_drag_point is not None:
+            self._drop_insert_row = self._drop_row_for_point(self._last_drag_point)
         self.viewport().update()
 
     def _stop_drag_auto_scroll(self) -> None:
@@ -316,6 +383,16 @@ class ReorderableItemListWidget(DragAutoScrollListWidget):
         super().__init__(parent)
         self._empty_hint = ""
         self.rows_manually_reordered.connect(self.items_reordered.emit)
+
+    def _constrain_drop_row(self, from_row: int, drop_row: int) -> int:
+        if not 0 <= from_row < self.count():
+            return drop_row
+        pinned_count = 0
+        while pinned_count < self.count() and self.item(pinned_count).data(ITEM_PINNED_ROLE):
+            pinned_count += 1
+        if self.item(from_row).data(ITEM_PINNED_ROLE):
+            return max(0, min(drop_row, pinned_count))
+        return max(pinned_count, min(drop_row, self.count()))
 
     def set_empty_hint(self, text: str) -> None:
         self._empty_hint = (text or "").strip()
@@ -1297,6 +1374,11 @@ class MainWindow(QMainWindow):
         self._suppress_item_reorder_emit = False
         self._item_list_search_mode = False
         self._last_selected_item_id: Optional[int] = None
+        self._reorder_highlight_item_id: Optional[int] = None
+        self._reorder_highlight_timer = QTimer(self)
+        self._reorder_highlight_timer.setSingleShot(True)
+        self._reorder_highlight_timer.setInterval(850)
+        self._reorder_highlight_timer.timeout.connect(self._clear_item_reorder_highlight)
         self._item_render_generation = 0
         self._pending_render_items: list[ClipItem] = []
         self._pending_render_index = 0
@@ -1377,7 +1459,7 @@ class MainWindow(QMainWindow):
         self.tab_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.tab_list.setDragEnabled(True)
         self.tab_list.setAcceptDrops(True)
-        self.tab_list.setDropIndicatorShown(True)
+        self.tab_list.setDropIndicatorShown(False)
         self.tab_list.setDragDropOverwriteMode(False)
         self.tab_list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self.tab_list.setDefaultDropAction(Qt.DropAction.MoveAction)
@@ -1482,6 +1564,7 @@ class MainWindow(QMainWindow):
             secondary_role=ITEM_SECONDARY_TEXT_ROLE,
             type_label_role=ITEM_TYPE_LABEL_ROLE,
             pinned_role=ITEM_PINNED_ROLE,
+            item_id_role=ITEM_ID_ROLE,
             pinned_color=self._pinned_accent_color,
             note_color=self._note_text_color,
             note_font_size=self._note_font_size,
@@ -2882,6 +2965,53 @@ class MainWindow(QMainWindow):
             return
         if item_ids:
             self.item_order_changed.emit(item_ids, int(tab_id))
+
+    def finish_item_reorder(self, item_ids: list[int]) -> None:
+        """Keep the moved row visible after persistence without rebuilding the list."""
+        moved_id = None
+        current = self.item_list.currentItem()
+        if current is not None:
+            try:
+                moved_id = int(current.data(ITEM_ID_ROLE))
+            except (TypeError, ValueError):
+                moved_id = None
+        if moved_id is None and item_ids:
+            try:
+                moved_id = int(item_ids[0])
+            except (TypeError, ValueError):
+                return
+        if moved_id is None:
+            return
+
+        for row in range(self.item_list.count()):
+            item = self.item_list.item(row)
+            if item is None:
+                continue
+            try:
+                item_id = int(item.data(ITEM_ID_ROLE))
+            except (TypeError, ValueError):
+                continue
+            if item_id == moved_id:
+                self.item_list.setCurrentItem(item)
+                self.item_list.scrollToItem(
+                    item,
+                    QAbstractItemView.ScrollHint.PositionAtCenter,
+                )
+                self._last_selected_item_id = moved_id
+                self._reorder_highlight_item_id = moved_id
+                if self._item_delegate is not None:
+                    self._item_delegate.set_reorder_highlight_item(moved_id)
+                self._reorder_highlight_timer.start()
+                self.item_list.viewport().update()
+                return
+
+    def _clear_item_reorder_highlight(self) -> None:
+        if self._reorder_highlight_item_id is None:
+            return
+        self._reorder_highlight_item_id = None
+        if self._item_delegate is not None:
+            self._item_delegate.set_reorder_highlight_item(None)
+        self.item_list.viewport().update()
 
     def _prompt_add_tab(self) -> None:
         dialog = TextInputDialog(self, "新增标签页", "标签页名称：", placeholder="例如：常用语")

@@ -13,7 +13,9 @@ from PySide6.QtWidgets import QApplication, QListWidgetItem
 
 from clipboard_manager.ui.main_window import (
     ITEM_ID_ROLE,
+    ITEM_PINNED_ROLE,
     DragAutoScrollListWidget,
+    ReorderableItemListWidget,
     MainWindow,
 )
 
@@ -92,6 +94,35 @@ class ManualMoveTests(unittest.TestCase):
         )
 
 
+    def test_source_identity_survives_new_capture_and_missing_source_cancels(self) -> None:
+        widget = self._make_widget()
+        for row in range(widget.count()):
+            widget.item(row).setData(ITEM_ID_ROLE, row + 1)
+        widget._drag_source_id = 2
+        widget.insertItem(0, QListWidgetItem("new capture"))
+        source_row = widget._resolve_drag_source_row()
+        self.assertEqual(source_row, 2)
+        widget._move_row(source_row, widget.count())
+        self.assertEqual(widget.item(widget.count() - 1).data(ITEM_ID_ROLE), 2)
+        widget.takeItem(widget.count() - 1)
+        self.assertEqual(widget._resolve_drag_source_row(), -1)
+        self.assertFalse(widget._move_row(-1, 0))
+
+    def test_moves_cannot_cross_pinned_boundary(self) -> None:
+        app = QApplication.instance() or QApplication([])
+        widget = ReorderableItemListWidget()
+        for index in range(4):
+            item = QListWidgetItem(str(index))
+            item.setData(ITEM_PINNED_ROLE, index < 2)
+            widget.addItem(item)
+        widget._move_row(3, 0)
+        widget._move_row(0, widget.count())
+        self.assertEqual(
+            [bool(widget.item(row).data(ITEM_PINNED_ROLE)) for row in range(4)],
+            [True, True, False, False],
+        )
+
+
 class TabOrderSaveTests(unittest.TestCase):
     @staticmethod
     def _make_controller():
@@ -127,6 +158,37 @@ class TabOrderSaveTests(unittest.TestCase):
         controller._on_tab_order_changed([999999])
 
         window.set_tabs.assert_called_once()
+
+    def test_item_order_success_keeps_ui_and_invalidates_cache(self) -> None:
+        controller, window, repo = self._make_controller()
+        try:
+            tab_id = repo.list_tabs()[0].id
+            first = repo.upsert_text_item(tab_id, "first")
+            second = repo.upsert_text_item(tab_id, "second")
+            window.current_tab_id.return_value = tab_id
+            controller._search_query = ""
+            controller._items_cache[tab_id] = repo.list_items(tab_id)
+            with mock.patch.object(controller, "_refresh_items") as refresh:
+                controller._on_item_order_changed([first.id, second.id], tab_id)
+                refresh.assert_not_called()
+            window.finish_item_reorder.assert_called_once_with([first.id, second.id])
+            self.assertNotIn(tab_id, controller._items_cache)
+            self.assertEqual([item.id for item in repo.list_items(tab_id)], [first.id, second.id])
+        finally:
+            repo.close()
+
+    def test_item_order_failure_refreshes_without_success_feedback(self) -> None:
+        controller, window, repo = self._make_controller()
+        try:
+            tab_id = repo.list_tabs()[0].id
+            window.current_tab_id.return_value = tab_id
+            controller._search_query = ""
+            with mock.patch.object(controller, "_refresh_items") as refresh:
+                controller._on_item_order_changed([999999], tab_id)
+                refresh.assert_called_once_with(tab_id)
+            window.finish_item_reorder.assert_not_called()
+        finally:
+            repo.close()
 
 
 if __name__ == "__main__":

@@ -1817,7 +1817,7 @@ class ClipRepository:
         没跑过时这条 pragma 是空操作，不会报错。
         """
         try:
-            conn.execute("PRAGMA incremental_vacuum(?)", (max(1, int(pages)),))
+            conn.execute(f"PRAGMA incremental_vacuum({max(1, int(pages))})")
         except sqlite3.Error:
             pass
 

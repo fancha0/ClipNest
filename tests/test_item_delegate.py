@@ -20,6 +20,7 @@ _SECONDARY_ROLE = _NOTE_ROLE + 3
 _TYPE_LABEL_ROLE = _NOTE_ROLE + 4
 _PINNED_ROLE = _NOTE_ROLE + 5
 _TYPE_ROLE = _NOTE_ROLE + 6
+_ITEM_ID_ROLE = _NOTE_ROLE + 7
 
 
 def _make_delegate(tokens=None, show_number_hints: bool = True) -> ClipItemDelegate:
@@ -36,6 +37,7 @@ def _make_delegate(tokens=None, show_number_hints: bool = True) -> ClipItemDeleg
         tokens=tokens,
         type_role=_TYPE_ROLE,
         show_number_hints=show_number_hints,
+        item_id_role=_ITEM_ID_ROLE,
     )
 
 
@@ -49,6 +51,7 @@ def _make_model(type_label: str = "", content_type: str = "", row_count: int = 1
         item.setData(type_label, _TYPE_LABEL_ROLE)
         item.setData(False, _PINNED_ROLE)
         item.setData(content_type, _TYPE_ROLE)
+        item.setData(row + 1, _ITEM_ID_ROLE)
         model.appendRow(item)
     return model
 
@@ -148,6 +151,17 @@ class ColoredTypePillTests(unittest.TestCase):
             _render_row(delegate, model),
             _render_row(delegate, neutral_model),
         )
+
+    def test_reorder_highlight_only_changes_matching_item(self) -> None:
+        model = _make_model(row_count=2)
+        delegate = _make_delegate()
+        normal_first = _render_row(delegate, model, 0)
+        normal_second = _render_row(delegate, model, 1)
+
+        delegate.set_reorder_highlight_item(2)
+
+        self.assertEqual(_render_row(delegate, model, 0), normal_first)
+        self.assertNotEqual(_render_row(delegate, model, 1), normal_second)
 
     def test_render_does_not_crash_for_every_type(self) -> None:
         for content_type, label in (

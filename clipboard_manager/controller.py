@@ -618,7 +618,7 @@ class AppController:
             self._refresh_items(current_tab_id)
             return
         self._invalidate_items_cache(current_tab_id)
-        self._refresh_items(current_tab_id)
+        self._window.finish_item_reorder(item_ids)
 
     def _on_create_tab(self, name: str) -> None:
         try:

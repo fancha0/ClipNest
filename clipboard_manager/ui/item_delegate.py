@@ -46,6 +46,7 @@ class ClipItemDelegate(QStyledItemDelegate):
         tokens: ThemeTokens | None = None,
         type_role: int = 0,
         show_number_hints: bool = True,
+        item_id_role: int = 0,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -56,6 +57,8 @@ class ClipItemDelegate(QStyledItemDelegate):
         self._type_label_role = int(type_label_role)
         self._pinned_role = int(pinned_role)
         self._type_role = int(type_role) if type_role else 0
+        self._item_id_role = int(item_id_role) if item_id_role else 0
+        self._reorder_highlight_item_id: int | None = None
         self._show_number_hints = bool(show_number_hints)
         self._pinned_color = self._normalized_color(pinned_color, "#1fb8cb")
         self._note_color = QColor(note_color)
@@ -72,6 +75,9 @@ class ClipItemDelegate(QStyledItemDelegate):
 
     def set_theme_tokens(self, tokens: ThemeTokens) -> None:
         self._tokens = tokens or default_light_business_theme()
+
+    def set_reorder_highlight_item(self, item_id: int | None) -> None:
+        self._reorder_highlight_item_id = int(item_id) if item_id is not None else None
 
     def set_antialias_enabled(self, enabled: bool) -> None:
         self._antialias_enabled = bool(enabled)
@@ -112,8 +118,21 @@ class ClipItemDelegate(QStyledItemDelegate):
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
         hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
         pinned = bool(index.data(self._pinned_role))
+        reorder_highlighted = (
+            self._reorder_highlight_item_id is not None
+            and self._item_id_role > 0
+            and index.data(self._item_id_role) == self._reorder_highlight_item_id
+        )
         card_rect = QRectF(option.rect.adjusted(3, 3, -3, -3))
         self._draw_card(painter, card_rect, selected=selected, hovered=hovered, pinned=pinned)
+        if reorder_highlighted:
+            highlight = self._parse_token_color(
+                self._tokens.item_selected_border,
+                fallback=QColor(45, 166, 224),
+            )
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(self._color_with_alpha(highlight, 230), 2.5))
+            painter.drawRoundedRect(card_rect.adjusted(1, 1, -1, -1), 9.0, 9.0)
 
         text_rect = option.rect.adjusted(14, 12, -14, -12)
         if pinned:
