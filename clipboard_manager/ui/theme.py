@@ -816,8 +816,9 @@ def _build_app_stylesheet_cached(tokens: ThemeTokens) -> str:
             background: {accent_bg};
             color: #ffffff;
             border: 1px solid {accent_border};
-            border-radius: 17px;
-            padding: 5px 14px;
+            border-radius: 15px;
+            padding: 3px 10px;
+            font-size: {max(10, tokens.base_font_size - 1)}px;
             font-weight: 600;
         }}
         QPushButton#updateButton:hover {{
@@ -825,6 +826,22 @@ def _build_app_stylesheet_cached(tokens: ThemeTokens) -> str:
         }}
         QPushButton#updateButton:pressed {{
             background: {accent_pressed_bg};
+        }}
+        QPushButton#updateButton[updateState="downloading"] {{
+            background: {tokens.secondary_button_bg};
+            color: {tokens.text_primary};
+            border: 1px solid {accent_border};
+        }}
+        QPushButton#updateButton[updateState="downloading"]:hover {{
+            background: {tokens.secondary_button_hover_bg};
+        }}
+        QPushButton#updateButton[updateState="error"] {{
+            background: rgba(209, 83, 75, 42);
+            color: #d0534b;
+            border: 1px solid rgba(209, 83, 75, 150);
+        }}
+        QPushButton#updateButton[updateState="error"]:hover {{
+            background: rgba(209, 83, 75, 66);
         }}
         QLineEdit#globalSearchInput {{
             min-height: 38px;

@@ -948,6 +948,10 @@ class SettingsDialog(ResizableDialog):
     def set_update_status(self, text: str) -> None:
         self.set_apply_feedback(text)
 
+    def set_update_checking(self, checking: bool) -> None:
+        self.check_update_btn.setEnabled(not checking)
+        self.check_update_btn.setText("检查中..." if checking else "检查更新")
+
     def export_requested(self) -> bool:
         return bool(getattr(self, "_export_requested", False))
 

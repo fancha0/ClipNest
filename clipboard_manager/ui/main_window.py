@@ -1346,7 +1346,14 @@ class MainWindow(QMainWindow):
         self._hotkey_text = ""
         self._active_settings_dialog: Optional[SettingsDialog] = None
         self._update_dialog: Optional[UpdateDialog] = None
+        self._update_dialog_version = ""
         self._latest_update_info: Optional[dict] = None
+        self._update_state = "hidden"
+        self._update_received = 0
+        self._update_total = 0
+        self._update_zip_path = ""
+        self._update_error = ""
+        self._update_checking = False
         self._auto_check_update = True
         self._diagnostic_logging = True
         self._capture_tab_text = "未设置"
@@ -1487,11 +1494,12 @@ class MainWindow(QMainWindow):
         self.search_input.addAction(search_icon_action, QLineEdit.ActionPosition.LeadingPosition)
         self.search_input.setMinimumWidth(220)
         self.search_input.setMaximumWidth(360)
-        self.update_button = QPushButton("发现更新")
+        self.update_button = QPushButton("更新")
         self.update_button.setObjectName("updateButton")
+        self.update_button.setAccessibleName("软件更新")
         self.update_button.setFixedHeight(30)
         self.update_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.update_button.setToolTip("打开最新版本更新窗口")
+        self.update_button.setToolTip("发现新版本时显示")
         self.update_button.clicked.connect(self._on_update_button_clicked)
         self.update_button.setVisible(False)
         self.capture_toggle_btn = QToolButton(self)
@@ -1515,8 +1523,8 @@ class MainWindow(QMainWindow):
         tools.addWidget(self.search_input, 1)
         tools.addStretch(1)
         tools.addWidget(self.capture_toggle_btn)
-        tools.addWidget(self.update_button)
         tools.addWidget(self.add_item_btn)
+        tools.addWidget(self.update_button)
         tools.addWidget(self.settings_button)
         right_layout.addLayout(tools)
 
@@ -1707,6 +1715,7 @@ class MainWindow(QMainWindow):
             ),
         )
         self._active_settings_dialog = dialog
+        dialog.set_update_checking(self._update_checking)
         dialog.apply_requested.connect(self._on_settings_apply_requested)
         dialog.check_update_requested.connect(self.check_update_requested.emit)
         dialog.clear_data_requested.connect(self.clear_all_data_requested.emit)
@@ -1740,6 +1749,13 @@ class MainWindow(QMainWindow):
         if dialog is not None:
             dialog.set_update_status(text)
 
+    def set_update_checking(self, checking: bool) -> None:
+        self._update_checking = bool(checking)
+        dialog = self._active_settings_dialog
+        if dialog is not None:
+            dialog.set_update_checking(self._update_checking)
+        self.update_button.setEnabled(not self._update_checking)
+
     def set_auto_check_update(self, enabled: bool) -> None:
         self._auto_check_update = bool(enabled)
 
@@ -1749,46 +1765,180 @@ class MainWindow(QMainWindow):
             dialog.set_latest_version(version, newer)
 
     def show_update_available(self, info: dict) -> None:
+        version = str(info.get("version") or "")
+        previous_version = str((self._latest_update_info or {}).get("version") or "")
+        changed = not previous_version or version != previous_version
         self._latest_update_info = dict(info)
-        self.update_button.setText(f"↓ 更新 v{info.get('version', '')}")
-        self.update_button.setVisible(True)
+        if changed:
+            self._update_state = "available"
+            self._update_received = 0
+            self._update_total = 0
+            self._update_zip_path = ""
+            self._update_error = ""
+            if self._update_dialog is not None:
+                self._update_dialog.close()
+                self._update_dialog.deleteLater()
+                self._update_dialog = None
+                self._update_dialog_version = ""
+        elif self._update_state == "hidden":
+            self._update_state = "available"
+        self._refresh_update_button()
+        if changed:
+            self._show_update_notice(
+                f"发现新版本 v{version}，可点击右上角更新按钮查看"
+            )
+
+    def _update_version(self) -> str:
+        return str((self._latest_update_info or {}).get("version") or "")
+
+    def _refresh_update_button(self) -> None:
+        button = getattr(self, "update_button", None)
+        if button is None:
+            return
+        state = self._update_state
+        version = self._update_version()
+        if state == "hidden":
+            button.hide()
+            return
+        if state == "downloading":
+            if self._update_total > 0:
+                percent = min(
+                    100, int(self._update_received * 100 / self._update_total)
+                )
+                text = f"{percent}%"
+                tooltip = f"正在下载 v{version}：{percent}%"
+            else:
+                text = "下载"
+                tooltip = f"正在下载 v{version}..."
+        elif state == "ready":
+            text = "安装"
+            tooltip = f"v{version} 已下载，点击安装并重启"
+        elif state == "error":
+            text = "重试"
+            tooltip = f"更新失败：{self._update_error or '未知错误'}\n点击重试"
+        else:
+            text = "更新"
+            tooltip = f"发现新版本 v{version}，点击查看"
+        button.setText(text)
+        button.setToolTip(tooltip)
+        button.setProperty("updateState", state)
+        style = button.style()
+        style.unpolish(button)
+        style.polish(button)
+        button.ensurePolished()
+        metrics = button.fontMetrics()
+        width = max(
+            metrics.horizontalAdvance(label)
+            for label in ("更新", "下载", "100%", "安装", "重试")
+        )
+        button.setFixedWidth(max(74, min(112, width + 28)))
+        button.show()
+
+    def _show_update_notice(self, message: str, kind: str = "info") -> None:
+        if self.isVisible():
+            show_toast(self, message, kind)
+            return
+        tray = getattr(self, "_tray_icon", None)
+        if tray is not None and tray.isVisible():
+            icon = (
+                QSystemTrayIcon.MessageIcon.Warning
+                if kind == "error"
+                else QSystemTrayIcon.MessageIcon.Information
+            )
+            tray.showMessage(APP_NAME, message, icon, 3500)
+
+    def _ensure_update_dialog(self) -> UpdateDialog:
+        version = self._update_version()
+        if (
+            self._update_dialog is not None
+            and self._update_dialog_version == version
+        ):
+            return self._update_dialog
         if self._update_dialog is not None:
             self._update_dialog.close()
             self._update_dialog.deleteLater()
-        dialog = UpdateDialog(self, info, frozen=is_frozen())
-        dialog.download_requested.connect(self.update_download_requested.emit)
+        dialog = UpdateDialog(
+            self, self._latest_update_info or {}, frozen=is_frozen()
+        )
+        dialog.download_requested.connect(self._on_update_download_started)
         dialog.install_requested.connect(self.update_install_requested.emit)
-        dialog.finished.connect(self._on_update_dialog_closed)
         self._update_dialog = dialog
-        dialog.open()
+        self._update_dialog_version = version
+        return dialog
+
+    def _sync_update_dialog_state(self, dialog: UpdateDialog) -> None:
+        dialog.set_info(self._latest_update_info or {})
+        if self._update_state == "downloading":
+            dialog.set_downloading()
+            if self._update_total > 0:
+                dialog.set_progress(self._update_received, self._update_total)
+        elif self._update_state == "ready":
+            dialog.set_ready(self._update_zip_path, self._update_version())
+        elif self._update_state == "error":
+            dialog.set_failed(self._update_error)
 
     def _on_update_button_clicked(self) -> None:
-        if self._latest_update_info is not None:
-            self.show_update_available(self._latest_update_info)
+        if self._latest_update_info is None:
+            return
+        dialog = self._ensure_update_dialog()
+        self._sync_update_dialog_state(dialog)
+        if dialog.isVisible():
+            dialog.raise_()
+            dialog.activateWindow()
+            return
+        dialog.open()
 
     def clear_update_available(self) -> None:
         self._latest_update_info = None
-        self.update_button.setText("发现更新")
-        self.update_button.setVisible(False)
-
-    def _on_update_dialog_closed(self, _result: int) -> None:
+        self._update_state = "hidden"
+        self._update_received = 0
+        self._update_total = 0
+        self._update_zip_path = ""
+        self._update_error = ""
         if self._update_dialog is not None:
+            self._update_dialog.close()
             self._update_dialog.deleteLater()
             self._update_dialog = None
+            self._update_dialog_version = ""
+        self._refresh_update_button()
+
+    def _on_update_download_started(
+        self, url: str, version: str, size: int, sha256: str
+    ) -> None:
+        self._update_state = "downloading"
+        self._update_received = 0
+        self._update_total = int(size or 0)
+        self._update_error = ""
+        self._refresh_update_button()
+        self.update_download_requested.emit(url, version, size, sha256)
 
     def show_update_progress(self, received: int, total: int) -> None:
+        self._update_state = "downloading"
+        self._update_received = max(0, int(received))
+        self._update_total = max(0, int(total))
+        self._refresh_update_button()
         if self._update_dialog is not None:
-            self._update_dialog.set_progress(received, total)
+            self._update_dialog.set_progress(self._update_received, self._update_total)
 
     def show_update_ready(self, zip_path: str, version: str) -> None:
+        self._update_zip_path = zip_path
+        self._update_state = "ready"
+        self._update_error = ""
+        self._refresh_update_button()
         if self._update_dialog is not None:
             self._update_dialog.set_ready(zip_path, version)
+        if self._update_dialog is None or not self._update_dialog.isVisible():
+            self._show_update_notice("更新包下载完成，点击右上角“安装”按钮")
 
     def show_update_error(self, message: str) -> None:
+        self._update_state = "error"
+        self._update_error = message
+        self._refresh_update_button()
         if self._update_dialog is not None:
             self._update_dialog.set_failed(message)
-        else:
-            self.show_error(f"检查更新失败：{message}")
+            if self._update_dialog.isVisible():
+                return
+        self._show_update_notice("更新下载失败，点击右上角“重试”按钮", "error")
 
     def set_tabs(self, tabs: list[Tab], active_tab_id: Optional[int]) -> None:
         self._tabs_snapshot = list(tabs)
@@ -3304,6 +3454,7 @@ class MainWindow(QMainWindow):
             else:
                 self.setFont(base_font)
                 self.setStyleSheet(app_stylesheet)
+            self._refresh_update_button()
             self.settings_button.setIcon(
                 resolved_line_icon("gear", bool(self._theme_tokens.is_dark), 18)
             )

@@ -145,6 +145,8 @@ class AppController:
         self._search_generation = 0
         self._search_started_at = 0.0
         self._update_check_silent = False
+        self._update_check_running = False
+        self._update_download_running = False
         self._pending_focus_target: Optional[FocusTarget] = None
         self._auto_hide_on_paste = AUTO_HIDE_ON_PASTE
         self._capture_tab_id: Optional[int] = None
@@ -1329,10 +1331,16 @@ class AppController:
             self._check_for_updates(silent=True)
 
     def _check_for_updates(self, silent: bool) -> None:
+        if self._update_check_running or self._update_download_running:
+            return
+        self._update_check_running = True
         self._update_check_silent = silent
+        self._window.set_update_checking(True)
         self._update_service.check_async()
 
     def _on_update_check_succeeded(self, info: dict) -> None:
+        self._update_check_running = False
+        self._window.set_update_checking(False)
         version = str(info.get("version") or "")
         newer = bool(version) and is_newer(version)
         self._window.notify_update_check_result(version or "未知", newer)
@@ -1344,6 +1352,8 @@ class AppController:
                 self._window.set_update_status(f"当前已是最新版本 v{version or '未知'}")
 
     def _on_update_check_failed(self, message: str) -> None:
+        self._update_check_running = False
+        self._window.set_update_checking(False)
         if self._update_check_silent:
             logger.info("[Update] silent startup check failed: %s", message)
             return
@@ -1355,13 +1365,18 @@ class AppController:
     def _on_update_download_requested(
         self, url: str, version: str, size: int, sha256: str
     ) -> None:
+        if self._update_download_running:
+            return
+        self._update_download_running = True
         self._update_service.download_async(url, version, size, sha256)
 
     def _on_update_download_succeeded(self, zip_path: str, version: str) -> None:
+        self._update_download_running = False
         self._update_zip_path = zip_path
         self._window.show_update_ready(zip_path, version)
 
     def _on_update_download_failed(self, message: str) -> None:
+        self._update_download_running = False
         self._window.show_update_error(message)
 
     def _on_update_install_requested(self, zip_path: str, _version: str) -> None:
