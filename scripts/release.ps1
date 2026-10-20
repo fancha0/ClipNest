@@ -22,7 +22,7 @@ function Invoke-NativeCommand {
     $previous = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-        & $Action
+        & $Action | Out-Host
         return $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $previous
