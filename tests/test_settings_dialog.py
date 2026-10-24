@@ -159,6 +159,63 @@ class SettingsDialogApplyTests(unittest.TestCase):
         dialog.auto_update_chk.setChecked(False)
         self.assertFalse(dialog.result_payload().auto_check_update)
 
+    def test_shortcut_overview_updates_after_editing(self) -> None:
+        dialog = self._make_dialog()
+        dialog.hotkey_edit.setKeySequence(QKeySequence("Ctrl+Alt+K"))
+        dialog.capture_toggle_hotkey_edit.setKeySequence(QKeySequence("Ctrl+Alt+P"))
+        self.assertEqual(
+            dialog._shortcut_value_labels["打开面板"].text(),
+            "Ctrl+Alt+K",
+        )
+        self.assertEqual(
+            dialog._shortcut_value_labels["暂停/恢复监听"].text(),
+            "Ctrl+Alt+P",
+        )
+
+    def test_shortcut_overview_uses_two_column_grid(self) -> None:
+        dialog = self._make_dialog()
+        self.assertEqual(dialog._shortcut_grid._COLUMNS, 2)
+        self.assertEqual(len(dialog._shortcut_grid._cells), 6)
+
+    def test_shortcut_grid_filter_hides_non_matching_cells(self) -> None:
+        dialog = self._make_dialog()
+        grid = dialog._shortcut_grid
+        self.assertTrue(grid.apply_filter("Enter"))
+        visible = [cell for cell in grid._cells if not cell.isHidden()]
+        self.assertEqual(len(visible), 1)
+        self.assertIn("Enter", grid.value_labels["粘贴选中条目"].text())
+        grid.apply_filter("")
+        self.assertTrue(all(not cell.isHidden() for cell in grid._cells))
+
+
+class SettingsDialogGlassTests(unittest.TestCase):
+    def test_window_is_frameless_and_translucent(self) -> None:
+        from PySide6.QtCore import Qt
+
+        dialog = SettingsDialogApplyTests._make_dialog()
+        self.assertTrue(
+            bool(dialog.windowFlags() & Qt.WindowType.FramelessWindowHint)
+        )
+        self.assertTrue(
+            dialog.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        )
+        self.assertEqual(dialog.objectName(), "settingsDialog")
+
+    def test_glass_layers_and_custom_titlebar_exist(self) -> None:
+        from PySide6.QtWidgets import QWidget
+
+        dialog = SettingsDialogApplyTests._make_dialog()
+        glass_root = dialog.findChild(QWidget, "glassDialogRoot")
+        self.assertIsNotNone(glass_root)
+        self.assertIsNotNone(dialog._frosted_overlay)
+        self.assertEqual(dialog._title_bar.objectName(), "titleBar")
+        self.assertTrue(dialog._title_bar._collapse_btn.isHidden())
+
+    def test_dialog_accepts_cancel_after_frameless_change(self) -> None:
+        dialog = SettingsDialogApplyTests._make_dialog()
+        dialog.reject()
+        self.assertEqual(dialog.result(), 0)
+
 
 class ToggleSwitchTests(unittest.TestCase):
     def test_toggle_state_and_signal(self) -> None:

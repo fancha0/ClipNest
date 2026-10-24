@@ -6,6 +6,92 @@ import unittest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
+class GlassDialogCoverageTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+
+    def _assert_glass(self, dialog) -> None:
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QWidget
+
+        self.assertTrue(
+            bool(dialog.windowFlags() & Qt.WindowType.FramelessWindowHint)
+        )
+        self.assertTrue(
+            dialog.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        )
+        self.assertIsNotNone(dialog.findChild(QWidget, "glassDialogRoot"))
+        self.assertIsNotNone(dialog._title_bar)
+        self.assertTrue(dialog._title_bar._collapse_btn.isHidden())
+        dialog.deleteLater()
+
+    def test_feedback_dialogs_use_glass_shell(self) -> None:
+        from clipboard_manager.ui.feedback import (
+            ConfirmDialog,
+            ExportProgressDialog,
+            MessageDialog,
+            NoteEditDialog,
+            ProgressDialog,
+            TextInputDialog,
+        )
+
+        dialogs = [
+            MessageDialog(None, "提示", "消息"),
+            ConfirmDialog(None, "确认", "确认？"),
+            TextInputDialog(None, "输入", "名称："),
+            NoteEditDialog(None, "备注"),
+            ProgressDialog(None, "处理中", "请稍候"),
+            ExportProgressDialog(None, "导出", "正在导出"),
+        ]
+        for dialog in dialogs:
+            with self.subTest(dialog=type(dialog).__name__):
+                self._assert_glass(dialog)
+
+    def test_progress_dialogs_hide_close_button(self) -> None:
+        from clipboard_manager.ui.feedback import ProgressDialog, ExportProgressDialog
+
+        for dialog in (
+            ProgressDialog(None, "处理中", "请稍候"),
+            ExportProgressDialog(None, "导出", "正在导出"),
+        ):
+            with self.subTest(dialog=type(dialog).__name__):
+                self.assertTrue(dialog._title_bar._close_btn.isHidden())
+                dialog.deleteLater()
+
+    def test_editor_and_picker_dialogs_use_glass_shell(self) -> None:
+        from clipboard_manager.ui.main_window import (
+            BundleItemDialog,
+            EditItemDialog,
+            MultiSelectDialog,
+        )
+        from clipboard_manager.ui.settings_widgets import ColorPickerDialog
+        from clipboard_manager.ui.update_dialog import UpdateDialog
+
+        dialogs = [
+            BundleItemDialog(None, "新建"),
+            EditItemDialog(None, "text"),
+            MultiSelectDialog(None, "选择", "请选择", [("a", "A")]),
+            ColorPickerDialog(None, "颜色", "#1677c8"),
+            UpdateDialog(None, {"version": "0.1.26"}, False),
+        ]
+        for dialog in dialogs:
+            with self.subTest(dialog=type(dialog).__name__):
+                self._assert_glass(dialog)
+
+    def test_export_progress_cancel_emits(self) -> None:
+        from clipboard_manager.ui.feedback import ExportProgressDialog
+
+        dialog = ExportProgressDialog(None, "导出", "正在导出")
+        received: list[bool] = []
+        dialog.canceled.connect(lambda: received.append(True))
+        dialog._cancel()
+        self.assertEqual(received, [True])
+        dialog.deleteLater()
+
+
 class FeedbackWidgetTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:

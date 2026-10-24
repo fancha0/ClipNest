@@ -51,7 +51,6 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QHBoxLayout,
-    QProgressDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -85,6 +84,7 @@ from .frosted_overlay import FrostedOverlay
 from .window_effects import apply_acrylic, argb_tint, disable_backdrop
 from .title_bar import TitleBar
 from .feedback import (
+    ExportProgressDialog,
     MessageDialog,
     NoteEditDialog,
     ProgressDialog,
@@ -951,8 +951,8 @@ class BundleItemDialog(ResizableDialog):
         self._refresh_image_list()
 
     def _build_ui(self, initial_text: str) -> None:
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 16, 18, 16)
+        layout = self.content_layout
+        layout.setContentsMargins(18, 14, 18, 16)
         layout.setSpacing(10)
 
         header = QLabel("输入文字、粘贴图片，或直接把图片拖到编辑区", self)
@@ -1065,7 +1065,9 @@ class EditItemDialog(ResizableDialog):
         self._build_ui(initial_text, initial_note)
 
     def _build_ui(self, initial_text: str, initial_note: str) -> None:
-        layout = QVBoxLayout(self)
+        layout = self.content_layout
+        layout.setContentsMargins(18, 14, 18, 16)
+        layout.setSpacing(10)
         layout.addWidget(QLabel("内容："))
 
         self.text_edit = QTextEdit(self)
@@ -1190,7 +1192,9 @@ class MultiSelectDialog(ResizableDialog):
         super().__init__(parent)
         self.setWindowTitle(title)
         self._bulk_check_update = False
-        layout = QVBoxLayout(self)
+        layout = self.content_layout
+        layout.setContentsMargins(18, 14, 18, 16)
+        layout.setSpacing(10)
         desc = QLabel(prompt, self)
         desc.setWordWrap(True)
         layout.addWidget(desc)
@@ -1497,35 +1501,65 @@ class MainWindow(QMainWindow):
         self.update_button = QPushButton("更新")
         self.update_button.setObjectName("updateButton")
         self.update_button.setAccessibleName("软件更新")
-        self.update_button.setFixedHeight(30)
+        self.update_button.setFixedHeight(36)
         self.update_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.update_button.setToolTip("发现新版本时显示")
         self.update_button.clicked.connect(self._on_update_button_clicked)
         self.update_button.setVisible(False)
-        self.capture_toggle_btn = QToolButton(self)
+
+        self.toolbar_button_group = QWidget(self)
+        self.toolbar_button_group.setObjectName("toolbarButtonGroup")
+        self.toolbar_button_group.setFixedHeight(36)
+        group_layout = QHBoxLayout(self.toolbar_button_group)
+        group_layout.setContentsMargins(1, 1, 1, 1)
+        group_layout.setSpacing(0)
+
+        self.capture_toggle_btn = QToolButton(self.toolbar_button_group)
         self.capture_toggle_btn.setObjectName("captureToggleButton")
         self.capture_toggle_btn.setCheckable(True)
         self.capture_toggle_btn.setChecked(True)
-        self.capture_toggle_btn.setFixedHeight(30)
+        self.capture_toggle_btn.setFixedSize(QSize(34, 34))
         self.capture_toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.add_item_btn = QToolButton()
+        self.capture_toggle_btn.setAccessibleName("暂停剪贴板监听")
+
+        self.capture_status_dot = QLabel(self.capture_toggle_btn)
+        self.capture_status_dot.setObjectName("captureStatusDot")
+        self.capture_status_dot.setFixedSize(6, 6)
+        self.capture_status_dot.move(27, 3)
+        self.capture_status_dot.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
+        )
+
+        self.add_item_btn = QToolButton(self.toolbar_button_group)
         self.add_item_btn.setObjectName("addItemButton")
         self.add_item_btn.setIcon(_create_add_icon())
         self.add_item_btn.setIconSize(QSize(18, 18))
         self.add_item_btn.setToolTip("新建条目（Ctrl+N）")
-        self.add_item_btn.setFixedSize(QSize(34, 30))
-        self.settings_button = QToolButton()
+        self.add_item_btn.setFixedSize(QSize(34, 34))
+
+        self.settings_button = QToolButton(self.toolbar_button_group)
         self.settings_button.setObjectName("settingsButton")
         self.settings_button.setIcon(resolved_line_icon("gear", False, 18))
         self.settings_button.setIconSize(QSize(18, 18))
         self.settings_button.setToolTip("设置")
-        self.settings_button.setFixedSize(QSize(34, 30))
+        self.settings_button.setFixedSize(QSize(34, 34))
+
+        group_layout.addWidget(self.capture_toggle_btn)
+        separator_one = QFrame(self.toolbar_button_group)
+        separator_one.setObjectName("toolbarButtonSeparator")
+        separator_one.setFixedSize(1, 18)
+        group_layout.addWidget(separator_one, 0, Qt.AlignmentFlag.AlignVCenter)
+        group_layout.addWidget(self.add_item_btn)
+        separator_two = QFrame(self.toolbar_button_group)
+        separator_two.setObjectName("toolbarButtonSeparator")
+        separator_two.setFixedSize(1, 18)
+        group_layout.addWidget(separator_two, 0, Qt.AlignmentFlag.AlignVCenter)
+        group_layout.addWidget(self.settings_button)
+
         tools.addWidget(self.search_input, 1)
         tools.addStretch(1)
-        tools.addWidget(self.capture_toggle_btn)
-        tools.addWidget(self.add_item_btn)
         tools.addWidget(self.update_button)
-        tools.addWidget(self.settings_button)
+        tools.addWidget(self.toolbar_button_group)
         right_layout.addLayout(tools)
 
         self.inline_editor_frame = QFrame(self)
@@ -1665,17 +1699,23 @@ class MainWindow(QMainWindow):
         if enabled:
             color = "#cdd8e6" if dark else "#5a6a7e"
             icon = line_icon("capture_on", color, 18)
-            text = ""
+            accessible = "暂停剪贴板监听"
         else:
             color = "#e07a72" if dark else "#c2413d"
             icon = line_icon("capture_off", color, 18)
-            text = "已暂停"
+            accessible = "恢复剪贴板监听"
         button.blockSignals(True)
         button.setChecked(enabled)
         button.blockSignals(False)
         button.setIcon(icon)
         button.setIconSize(QSize(18, 18))
-        button.setText(text)
+        button.setText("")
+        button.setAccessibleName(accessible)
+        dot = getattr(self, "capture_status_dot", None)
+        if dot is not None:
+            dot.setProperty("paused", not enabled)
+            dot.style().unpolish(dot)
+            dot.style().polish(dot)
         button.setToolTip(
             f"自动记录剪贴板：{'开（点击暂停）' if enabled else '关（点击开启）'}"
             f"　快捷键 {self._capture_hotkey_text()}"
@@ -3230,14 +3270,7 @@ class MainWindow(QMainWindow):
 
     def show_export_progress(self, cancel_callback=None) -> None:
         self.close_export_progress()
-        progress = QProgressDialog("正在准备导出…", "取消导出", 0, 100, self)
-        progress.setObjectName("exportProgressDialog")
-        progress.setWindowTitle("导出数据")
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
-        progress.setMinimumDuration(0)
-        progress.setCancelButton(None)
-        progress.setMinimumWidth(380)
-        progress.setValue(0)
+        progress = ExportProgressDialog(self, "导出数据", "正在准备导出…")
         if cancel_callback is not None:
             progress.canceled.connect(cancel_callback)
         self._export_progress = progress

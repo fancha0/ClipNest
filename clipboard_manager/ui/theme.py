@@ -571,12 +571,16 @@ def _build_app_stylesheet_cached(tokens: ThemeTokens) -> str:
         tab_selected_border = "rgba(89, 212, 233, 138)"
         nav_hover_bg = "rgba(255, 255, 255, 22)"
         row_border = "rgba(255, 255, 255, 28)"
+        toolbar_hover_bg = "rgba(255, 255, 255, 34)"
+        toolbar_pressed_bg = "rgba(40, 183, 214, 54)"
     else:
         tab_hover_bg = "rgba(15, 23, 42, 14)"
         tab_selected_bg = "rgba(22, 119, 200, 22)"
         tab_selected_border = "rgba(22, 119, 200, 72)"
         nav_hover_bg = "rgba(15, 23, 42, 12)"
         row_border = "rgba(83, 126, 166, 56)"
+        toolbar_hover_bg = "rgba(255, 255, 255, 142)"
+        toolbar_pressed_bg = "rgba(22, 119, 200, 40)"
 
     return f"""
         QMainWindow {{
@@ -595,6 +599,15 @@ def _build_app_stylesheet_cached(tokens: ThemeTokens) -> str:
         QDialog, QMessageBox, QInputDialog {{
             background: {tokens.dialog_bg};
             color: {tokens.text_primary};
+            border: 1px solid {tokens.panel_border};
+        }}
+        QDialog[glassDialog="true"] {{
+            background: transparent;
+            border: none;
+        }}
+        QWidget#glassDialogRoot {{
+            background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1,
+                stop: 0 {window_start_rgba}, stop: 0.52 {window_end_rgba}, stop: 1 {window_base_rgba});
             border: 1px solid {tokens.panel_border};
         }}
         QDialog QLabel, QMessageBox QLabel, QInputDialog QLabel {{
@@ -767,8 +780,29 @@ def _build_app_stylesheet_cached(tokens: ThemeTokens) -> str:
             selection-background-color: {tokens.input_selection_bg};
             selection-color: {tokens.input_selection_text};
         }}
+        QLineEdit, QTextEdit, QKeySequenceEdit {{
+            min-height: 24px;
+        }}
         QLineEdit:focus, QTextEdit:focus, QKeySequenceEdit:focus {{
             border: 1px solid {tokens.input_focus_border};
+        }}
+        QSpinBox, QDoubleSpinBox {{
+            background: {tokens.input_bg};
+            color: {tokens.text_primary};
+            border: 1px solid {tokens.input_border};
+            border-radius: 6px;
+            min-height: 22px;
+            padding: 2px 6px;
+            selection-background-color: {tokens.input_selection_bg};
+            selection-color: {tokens.input_selection_text};
+        }}
+        QSpinBox:focus, QDoubleSpinBox:focus {{
+            border: 1px solid {tokens.input_focus_border};
+        }}
+        QSpinBox:disabled, QDoubleSpinBox:disabled {{
+            background: {tokens.input_bg};
+            color: {tokens.text_secondary};
+            border-color: {tokens.input_border};
         }}
         QPushButton {{
             background: {tokens.secondary_button_bg};
@@ -816,8 +850,8 @@ def _build_app_stylesheet_cached(tokens: ThemeTokens) -> str:
             background: {accent_bg};
             color: #ffffff;
             border: 1px solid {accent_border};
-            border-radius: 15px;
-            padding: 3px 10px;
+            border-radius: 18px;
+            padding: 0 14px;
             font-size: {max(10, tokens.base_font_size - 1)}px;
             font-weight: 600;
         }}
@@ -844,9 +878,9 @@ def _build_app_stylesheet_cached(tokens: ThemeTokens) -> str:
             background: rgba(209, 83, 75, 66);
         }}
         QLineEdit#globalSearchInput {{
-            min-height: 38px;
+            min-height: 34px;
             padding: 0 14px;
-            border-radius: 19px;
+            border-radius: 18px;
             background: {search_bg};
             border: 1px solid rgba(255, 255, 255, 150);
             color: {tokens.text_primary};
@@ -871,17 +905,6 @@ def _build_app_stylesheet_cached(tokens: ThemeTokens) -> str:
         }}
         QToolButton:pressed {{
             background: rgba(22, 119, 200, 80);
-        }}
-        QToolButton#addItemButton {{
-            background: transparent;
-            border: 1px solid transparent;
-        }}
-        QToolButton#addItemButton:hover {{
-            background: transparent;
-            border-color: transparent;
-        }}
-        QToolButton#settingsButton {{
-            padding: 0px;
         }}
         QFrame#inlineEditorFrame {{
             background: rgba(255, 255, 255, 42);
@@ -945,8 +968,10 @@ def _build_app_stylesheet_cached(tokens: ThemeTokens) -> str:
             border-left: 3px solid {accent_bg};
             color: {tokens.text_primary};
         }}
-        QStackedWidget#settingsPages, QScrollArea#settingsScroll {{
-            background: {tokens.dialog_bg};
+        QStackedWidget#settingsPages,
+        QScrollArea#settingsScroll,
+        QWidget#settingsScrollViewport {{
+            background: transparent;
             border: none;
         }}
         QLabel#settingsPageTitle {{
@@ -977,6 +1002,18 @@ def _build_app_stylesheet_cached(tokens: ThemeTokens) -> str:
         }}
         QFrame#settingRow:hover {{
             background: {nav_hover_bg};
+        }}
+        QFrame#shortcutGridCell {{
+            background: transparent;
+            border: none;
+            border-radius: 7px;
+        }}
+        QFrame#shortcutGridCell:hover {{
+            background: {nav_hover_bg};
+        }}
+        QFrame#shortcutGridVerticalSeparator {{
+            background: {tokens.panel_border};
+            border: none;
         }}
         QFrame#settingRowSeparator {{
             background: {tokens.panel_border};
@@ -1028,21 +1065,47 @@ def _build_app_stylesheet_cached(tokens: ThemeTokens) -> str:
             color: {tokens.text_primary};
             font-size: {tokens.base_font_size}px;
         }}
-        QToolButton#captureToggleButton {{
+        QWidget#toolbarButtonGroup {{
+            background: {search_bg};
+            border: 1px solid rgba(255, 255, 255, 150);
+            border-radius: 18px;
+        }}
+        QFrame#toolbarButtonSeparator {{
+            background: {row_border};
+            border: none;
+        }}
+        QToolButton#captureToggleButton,
+        QToolButton#addItemButton,
+        QToolButton#settingsButton {{
             background: transparent;
             border: 1px solid transparent;
-            border-radius: 10px;
-            padding: 3px 8px;
-            color: {tokens.text_secondary};
+            border-radius: 16px;
+            padding: 0px;
         }}
-        QToolButton#captureToggleButton:hover {{
-            background: {nav_hover_bg};
+        QToolButton#captureToggleButton:hover,
+        QToolButton#addItemButton:hover,
+        QToolButton#settingsButton:hover {{
+            background: {toolbar_hover_bg};
+            border-color: transparent;
+        }}
+        QToolButton#captureToggleButton:pressed,
+        QToolButton#addItemButton:pressed,
+        QToolButton#settingsButton:pressed {{
+            background: {toolbar_pressed_bg};
         }}
         QToolButton#captureToggleButton[paused="true"] {{
-            background: rgba(209, 83, 75, 40);
-            border: 1px solid rgba(209, 83, 75, 150);
-            color: #d0534b;
-            padding: 3px 10px;
+            background: rgba(209, 83, 75, 36);
+        }}
+        QToolButton#captureToggleButton[paused="true"]:hover {{
+            background: rgba(209, 83, 75, 60);
+        }}
+        QLabel#captureStatusDot {{
+            background: #4f9d69;
+            border: 1px solid rgba(255, 255, 255, 180);
+            border-radius: 3px;
+        }}
+        QLabel#captureStatusDot[paused="true"] {{
+            background: #d0534b;
         }}
         QWidget#titleBar {{
             background: transparent;

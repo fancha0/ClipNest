@@ -7,7 +7,6 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QTextEdit,
-    QVBoxLayout,
 )
 
 from .dialog_base import ResizableDialog
@@ -28,8 +27,8 @@ class UpdateDialog(ResizableDialog):
         self._zip_path: str = ""
         self._frozen = bool(frozen)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 18, 20, 18)
+        layout = self.content_layout
+        layout.setContentsMargins(20, 14, 20, 18)
         layout.setSpacing(10)
 
         self._version_label = QLabel(self)

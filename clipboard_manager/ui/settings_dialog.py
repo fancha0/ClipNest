@@ -42,6 +42,7 @@ from .settings_widgets import (
     SegmentedControl,
     SettingRow,
     SettingsSection,
+    ShortcutGrid,
     ThemeStyleSelector,
     ToggleSwitch,
     pick_color,
@@ -111,6 +112,7 @@ class SettingsDialog(ResizableDialog):
     _size_key = "settings_v2"
     _default_size = (820, 680)
     _min_size = (700, 560)
+    _frameless_glass = True
 
     apply_requested = Signal(object)
     check_update_requested = Signal()
@@ -139,6 +141,7 @@ class SettingsDialog(ResizableDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("设置")
+        self.setObjectName("settingsDialog")
 
         self._tabs = list(tabs)
         self._appearance = appearance
@@ -163,7 +166,7 @@ class SettingsDialog(ResizableDialog):
     # ---------- UI scaffolding ----------
 
     def _build_ui(self) -> None:
-        root = QVBoxLayout(self)
+        root = self.content_layout
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
@@ -254,6 +257,10 @@ class SettingsDialog(ResizableDialog):
         scroll.setObjectName("settingsScroll")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        scroll.viewport().setObjectName("settingsScrollViewport")
+        scroll.viewport().setAutoFillBackground(False)
+        page.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         scroll.setWidget(page)
         return scroll
 
@@ -295,10 +302,13 @@ class SettingsDialog(ResizableDialog):
         self.hotkey_edit = QKeySequenceEdit(page)
         self.hotkey_edit.setMaximumSequenceLength(1)
         self.hotkey_edit.setFixedWidth(190)
+        self.hotkey_edit.setAccessibleName("全局快捷键")
+        self.hotkey_edit.setToolTip("点击后按下新的组合键")
         if self._hotkey_initial:
             self.hotkey_edit.setKeySequence(QKeySequence(_to_qt_hotkey_text(self._hotkey_initial)))
 
         hotkey_reset_btn = QPushButton("恢复默认", page)
+        hotkey_reset_btn.setToolTip(f"恢复默认：{default_hotkey()}")
         hotkey_reset_btn.clicked.connect(self._reset_hotkey_to_default)
         hotkey_widget = QWidget(page)
         hotkey_layout = QHBoxLayout(hotkey_widget)
@@ -309,32 +319,43 @@ class SettingsDialog(ResizableDialog):
 
         self.capture_tab_combo = QComboBox(page)
         self.capture_tab_combo.setFixedWidth(190)
+        self.capture_tab_combo.setAccessibleName("监听存储标签")
         for tab_id, tab_name in self._tabs:
             self.capture_tab_combo.addItem(tab_name, tab_id)
         if self._capture_tab_initial is not None:
             index = self.capture_tab_combo.findData(self._capture_tab_initial)
             if index >= 0:
                 self.capture_tab_combo.setCurrentIndex(index)
+        self.capture_tab_combo.currentIndexChanged.connect(
+            self._refresh_capture_tab_tooltip
+        )
+        self._refresh_capture_tab_tooltip()
 
         self.capture_max_spin = QSpinBox(page)
         self.capture_max_spin.setRange(50, 5000)
         self.capture_max_spin.setSingleStep(50)
         self.capture_max_spin.setFixedWidth(120)
         self.capture_max_spin.setSuffix(" 条")
+        self.capture_max_spin.setAccessibleName("监听标签条目上限")
+        self.capture_max_spin.setToolTip("范围：50–5000 条")
         self.capture_max_spin.setValue(int(self._capture_max_initial))
 
         self.autostart_chk = ToggleSwitch(page)
+        self.autostart_chk.setAccessibleName("开机自动启动")
         self.autostart_chk.setChecked(bool(self._autostart_initial))
 
         self.capture_toggle_hotkey_edit = QKeySequenceEdit(page)
         self.capture_toggle_hotkey_edit.setMaximumSequenceLength(1)
         self.capture_toggle_hotkey_edit.setFixedWidth(190)
+        self.capture_toggle_hotkey_edit.setAccessibleName("暂停或恢复监听快捷键")
+        self.capture_toggle_hotkey_edit.setToolTip("点击后按下新的组合键")
         if self._capture_toggle_hotkey_initial:
             self.capture_toggle_hotkey_edit.setKeySequence(
                 QKeySequence(_to_qt_hotkey_text(self._capture_toggle_hotkey_initial))
             )
 
         self.capture_toggle_hotkey_reset_btn = QPushButton("恢复默认", page)
+        self.capture_toggle_hotkey_reset_btn.setToolTip("恢复默认：Ctrl+Shift+P")
         self.capture_toggle_hotkey_reset_btn.clicked.connect(
             self._reset_capture_toggle_hotkey
         )
@@ -371,6 +392,7 @@ class SettingsDialog(ResizableDialog):
 
         capture_section = SettingsSection("剪贴板监听", page)
         self.capture_enabled_chk = ToggleSwitch(page)
+        self.capture_enabled_chk.setAccessibleName("自动记录剪贴板")
         self.capture_enabled_chk.setChecked(bool(self._capture_enabled_initial))
         capture_section.add_row(
             SettingRow(
@@ -396,8 +418,14 @@ class SettingsDialog(ResizableDialog):
         layout.addWidget(capture_section)
 
         self.shortcut_overview_section = SettingsSection("快捷键一览", page)
-        self._populate_shortcuts()
+        self._shortcut_grid = ShortcutGrid(self._shortcut_rows(), page)
+        self._shortcut_value_labels = self._shortcut_grid.value_labels
+        self.shortcut_overview_section.add_card_widget(self._shortcut_grid)
         layout.addWidget(self.shortcut_overview_section)
+        self.hotkey_edit.keySequenceChanged.connect(self._refresh_shortcut_overview)
+        self.capture_toggle_hotkey_edit.keySequenceChanged.connect(
+            self._refresh_shortcut_overview
+        )
         layout.addStretch(1)
         return page
 
@@ -417,12 +445,14 @@ class SettingsDialog(ResizableDialog):
             ("快速粘贴第 1–9 条", "1 – 9"),
         ]
 
-    def _populate_shortcuts(self) -> None:
-        section = self.shortcut_overview_section
-        for name, keys in self._shortcut_rows():
-            value = QLabel(keys, section)
-            value.setObjectName("shortcutKeyLabel")
-            section.add_row(SettingRow(name, value))
+    def _refresh_shortcut_overview(self, *_args) -> None:
+        grid = getattr(self, "_shortcut_grid", None)
+        if grid is not None:
+            grid.set_values(self._shortcut_rows())
+
+    def _refresh_capture_tab_tooltip(self, *_args) -> None:
+        text = self.capture_tab_combo.currentText().strip()
+        self.capture_tab_combo.setToolTip(text or "没有可用的标签页")
 
 
 

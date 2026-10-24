@@ -43,6 +43,7 @@ class TitleBar(QWidget):
         layout.addWidget(self._title_label)
         layout.addStretch(1)
 
+        self._maximize_enabled = True
         self._collapse_btn = self._make_button("collapse", "收起")
         self._collapse_btn.clicked.connect(self.collapse_requested.emit)
         layout.addWidget(self._collapse_btn)
@@ -62,6 +63,18 @@ class TitleBar(QWidget):
         button.setCursor(Qt.CursorShape.PointingHandCursor)
         button.setAutoRaise(True)
         return button
+
+    def set_title(self, title: str) -> None:
+        self._title_label.setText(title)
+
+    def set_collapse_visible(self, visible: bool) -> None:
+        self._collapse_btn.setVisible(bool(visible))
+
+    def set_close_visible(self, visible: bool) -> None:
+        self._close_btn.setVisible(bool(visible))
+
+    def set_maximize_enabled(self, enabled: bool) -> None:
+        self._maximize_enabled = bool(enabled)
 
     def apply_theme(self, tokens: ThemeTokens) -> None:
         dark = bool(getattr(tokens, "is_dark", False))
@@ -83,7 +96,7 @@ class TitleBar(QWidget):
         super().mousePressEvent(event)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton and self._maximize_enabled:
             window = self.window()
             if window.isMaximized():
                 window.showNormal()

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtCore import QPoint, Qt, QTimer
+from PySide6.QtCore import QPoint, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QProgressBar,
     QPushButton,
     QTextEdit,
     QVBoxLayout,
@@ -22,6 +23,8 @@ class _MessageBase(ResizableDialog):
     _size_key = ""
     _default_size = (440, 190)
     _min_size = (360, 150)
+    _frameless_resize = False
+    _maximizable = False
 
     def __init__(self, parent: Optional[QWidget]) -> None:
         super().__init__(parent)
@@ -29,8 +32,8 @@ class _MessageBase(ResizableDialog):
         self.setModal(True)
 
     def _build_body(self, kind: str, message: str) -> QVBoxLayout:
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(22, 20, 22, 18)
+        layout = self.content_layout
+        layout.setContentsMargins(22, 14, 22, 18)
         layout.setSpacing(14)
 
         row = QHBoxLayout()
@@ -116,6 +119,8 @@ class ProgressDialog(_MessageBase):
     没有按钮、屏蔽 ESC 和关闭按钮，直到 finish() 才放行，避免用户中途打断。
     """
 
+    _show_titlebar_close = False
+
     def __init__(
         self,
         parent: Optional[QWidget],
@@ -151,6 +156,8 @@ class TextInputDialog(ResizableDialog):
     _size_key = ""
     _default_size = (420, 180)
     _min_size = (360, 160)
+    _frameless_resize = False
+    _maximizable = False
 
     def __init__(
         self,
@@ -164,8 +171,8 @@ class TextInputDialog(ResizableDialog):
         self.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint, False)
         self.setWindowTitle(title)
         self.setModal(True)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 18, 20, 16)
+        layout = self.content_layout
+        layout.setContentsMargins(20, 14, 20, 16)
         layout.setSpacing(12)
         if label:
             hint = QLabel(label, self)
@@ -210,8 +217,8 @@ class NoteEditDialog(ResizableDialog):
     def __init__(self, parent: Optional[QWidget], note: str = "") -> None:
         super().__init__(parent)
         self.setWindowTitle("编辑备注")
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 18, 20, 16)
+        layout = self.content_layout
+        layout.setContentsMargins(20, 14, 20, 16)
         layout.setSpacing(10)
         hint = QLabel("备注仅用于展示，不会随点击粘贴输出。", self)
         hint.setObjectName("settingRowDescription")
@@ -243,6 +250,72 @@ class NoteEditDialog(ResizableDialog):
 
     def value(self) -> str:
         return self._edit.toPlainText().strip()
+
+
+class ExportProgressDialog(ResizableDialog):
+    """Glass progress dialog used while exporting the database."""
+
+    canceled = Signal()
+
+    _size_key = ""
+    _default_size = (460, 210)
+    _min_size = (380, 180)
+    _frameless_resize = False
+    _maximizable = False
+    _show_titlebar_close = False
+
+    def __init__(self, parent: Optional[QWidget], title: str, message: str) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setModal(False)
+        self.setWindowModality(Qt.WindowModality.WindowModal)
+        self._finished = False
+
+        layout = self.content_layout
+        layout.setContentsMargins(20, 14, 20, 16)
+        layout.setSpacing(12)
+
+        self._label = QLabel(message, self)
+        self._label.setWordWrap(True)
+        layout.addWidget(self._label)
+
+        self._progress = QProgressBar(self)
+        self._progress.setRange(0, 100)
+        self._progress.setValue(0)
+        layout.addWidget(self._progress)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        self._cancel_btn = QPushButton("取消导出", self)
+        self._cancel_btn.clicked.connect(self._cancel)
+        buttons.addWidget(self._cancel_btn)
+        layout.addLayout(buttons)
+
+    def setLabelText(self, text: str) -> None:
+        self._label.setText(text)
+
+    def setMaximum(self, maximum: int) -> None:
+        self._progress.setMaximum(int(maximum))
+
+    def setValue(self, value: int) -> None:
+        self._progress.setValue(int(value))
+
+    def setMinimumDuration(self, _duration: int) -> None:
+        return
+
+    def _cancel(self) -> None:
+        if self._finished:
+            return
+        self._finished = True
+        self.canceled.emit()
+        self.close()
+
+    def reject(self) -> None:
+        self._cancel()
+
+    def finish(self) -> None:
+        self._finished = True
+        self.close()
 
 
 class Toast(QWidget):

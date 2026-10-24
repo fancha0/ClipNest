@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .dialog_base import ResizableDialog
 from .theme import current_theme_tokens, theme_style_colors
 
 
@@ -260,6 +261,7 @@ class SettingsSection(QWidget):
         self._row_count = 0
         self._rows: list[SettingRow] = []
         self._separators: list[QFrame] = []
+        self._filter_widgets: list[QWidget] = []
 
     def add_row(self, row: QWidget) -> None:
         if self._row_count > 0:
@@ -277,6 +279,12 @@ class SettingsSection(QWidget):
     def add_widget(self, widget: QWidget) -> None:
         self._layout.addWidget(widget)
 
+    def add_card_widget(self, widget: QWidget) -> None:
+        widget.setParent(self._card)
+        self._card_layout.addWidget(widget)
+        if hasattr(widget, "apply_filter"):
+            self._filter_widgets.append(widget)
+
     def apply_filter(self, query: str) -> bool:
         """Show only rows matching query; return True when anything is visible."""
         query = (query or "").strip().lower()
@@ -285,6 +293,8 @@ class SettingsSection(QWidget):
                 row.setVisible(True)
             for separator in self._separators:
                 separator.setVisible(True)
+            for widget in self._filter_widgets:
+                widget.apply_filter("")
             self.setVisible(True)
             return True
         any_visible = False
@@ -299,7 +309,98 @@ class SettingsSection(QWidget):
         for idx in range(1, len(visible_flags)):
             if visible_flags[idx] and visible_flags[idx - 1]:
                 self._separators[idx - 1].setVisible(True)
+        for widget in self._filter_widgets:
+            if widget.apply_filter(query):
+                any_visible = True
         self.setVisible(any_visible)
+        return any_visible
+
+
+class ShortcutGrid(QWidget):
+    """Two-column shortcut summary that stays filterable and live-updating."""
+
+    _COLUMNS = 2
+
+    def __init__(
+        self,
+        items: list[tuple[str, str]],
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._grid = QGridLayout(self)
+        self._grid.setContentsMargins(0, 0, 0, 0)
+        self._grid.setHorizontalSpacing(0)
+        self._grid.setVerticalSpacing(0)
+        self._grid.setColumnStretch(0, 1)
+        self._grid.setColumnStretch(1, 0)
+        self._grid.setColumnStretch(2, 1)
+
+        self._cells: list[QFrame] = []
+        self._cells_by_name: dict[str, QFrame] = {}
+        self._separators: list[QFrame] = []
+        self.value_labels: dict[str, QLabel] = {}
+
+        for idx, (name, keys) in enumerate(items):
+            row = (idx // self._COLUMNS) * 2
+            column = (idx % self._COLUMNS) * 2
+            cell = QFrame(self)
+            cell.setObjectName("shortcutGridCell")
+            cell_layout = QVBoxLayout(cell)
+            cell_layout.setContentsMargins(14, 10, 14, 10)
+            cell_layout.setSpacing(6)
+            title = QLabel(name, cell)
+            title.setObjectName("settingRowTitle")
+            title.setWordWrap(True)
+            value = QLabel(keys, cell)
+            value.setObjectName("shortcutKeyLabel")
+            value.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            cell_layout.addWidget(title)
+            cell_layout.addWidget(value, 0, Qt.AlignmentFlag.AlignLeft)
+            self._grid.addWidget(cell, row, column)
+            self._cells.append(cell)
+            self._cells_by_name[name] = cell
+            self.value_labels[name] = value
+            cell._search_text = f"{name} {keys}".lower()  # type: ignore[attr-defined]
+
+        rows = (len(items) + self._COLUMNS - 1) // self._COLUMNS
+        if rows > 0:
+            vertical = QFrame(self)
+            vertical.setObjectName("shortcutGridVerticalSeparator")
+            vertical.setFixedWidth(1)
+            self._grid.addWidget(vertical, 0, 1, rows * 2 - 1, 1)
+            self._separators.append(vertical)
+            for row in range(1, rows):
+                separator = QFrame(self)
+                separator.setObjectName("settingRowSeparator")
+                separator.setFixedHeight(1)
+                self._grid.addWidget(separator, row * 2 - 1, 0, 1, 3)
+                self._separators.append(separator)
+
+    def set_values(self, items: list[tuple[str, str]]) -> None:
+        for name, keys in items:
+            label = self.value_labels.get(name)
+            if label is None:
+                continue
+            label.setText(keys)
+            cell = self._cells_by_name.get(name)
+            if cell is not None:
+                cell._search_text = f"{name} {keys}".lower()  # type: ignore[attr-defined]
+
+    def apply_filter(self, query: str) -> bool:
+        query = (query or "").strip().lower()
+        if not query:
+            for cell in self._cells:
+                cell.setVisible(True)
+            for separator in self._separators:
+                separator.setVisible(True)
+            return True
+        any_visible = False
+        for cell in self._cells:
+            visible = query in str(getattr(cell, "_search_text", ""))
+            cell.setVisible(visible)
+            any_visible = any_visible or visible
+        for separator in self._separators:
+            separator.setVisible(False)
         return any_visible
 
 
@@ -637,8 +738,14 @@ class _StyleCard(QFrame):
         painter.end()
 
 
-class ColorPickerDialog(QDialog):
+class ColorPickerDialog(ResizableDialog):
     """Theme-aware color picker: preset swatches plus an advanced native picker."""
+
+    _size_key = ""
+    _default_size = (360, 440)
+    _min_size = (330, 410)
+    _frameless_resize = False
+    _maximizable = False
 
     _PRESETS: tuple[str, ...] = (
         "#ffffff", "#f6f9ff", "#eef6f1", "#e9f1ea", "#e8edf5", "#edf7ff",
@@ -655,8 +762,8 @@ class ColorPickerDialog(QDialog):
         if not self._color.isValid():
             self._color = QColor("#ffffff")
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 16, 18, 14)
+        layout = self.content_layout
+        layout.setContentsMargins(18, 14, 18, 14)
         layout.setSpacing(12)
 
         self._preview = QLabel(self)
@@ -700,6 +807,12 @@ class ColorPickerDialog(QDialog):
         layout.addWidget(buttons)
 
         self._sync_preview()
+        self.adjustSize()
+        hint = self.sizeHint()
+        self.setFixedSize(
+            max(self._min_size[0], hint.width()),
+            max(self._min_size[1], hint.height()),
+        )
 
     def _set_color(self, color_hex: str) -> None:
         color = QColor(color_hex)

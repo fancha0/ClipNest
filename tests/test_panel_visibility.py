@@ -35,14 +35,30 @@ class PanelVisibilityTests(unittest.TestCase):
         self.assertFalse(window._panel_visible)
         window.deleteLater()
 
-    def test_capture_button_state_text(self) -> None:
+    def test_capture_button_state_without_text_width_jump(self) -> None:
         window = MainWindow()
         window.set_capture_enabled(False)
-        self.assertEqual(window.capture_toggle_btn.text(), "已暂停")
+        self.assertEqual(window.capture_toggle_btn.text(), "")
         self.assertTrue(window.capture_toggle_btn.property("paused"))
+        self.assertTrue(window.capture_status_dot.property("paused"))
         window.set_capture_enabled(True)
         self.assertEqual(window.capture_toggle_btn.text(), "")
         self.assertFalse(window.capture_toggle_btn.property("paused"))
+        self.assertFalse(window.capture_status_dot.property("paused"))
+        self.assertEqual(window.capture_toggle_btn.size(), window.add_item_btn.size())
+        window.deleteLater()
+
+    def test_toolbar_utility_buttons_share_glass_group(self) -> None:
+        window = MainWindow()
+        group = window.toolbar_button_group
+        self.assertEqual(group.objectName(), "toolbarButtonGroup")
+        for button in (
+            window.capture_toggle_btn,
+            window.add_item_btn,
+            window.settings_button,
+        ):
+            self.assertIs(button.parentWidget(), group)
+            self.assertEqual(button.size().width(), button.size().height())
         window.deleteLater()
 
     def test_should_hide_follows_panel_state(self) -> None:
