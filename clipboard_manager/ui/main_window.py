@@ -17,6 +17,7 @@ from PySide6.QtCore import (
     QIODevice,
     QObject,
     QPoint,
+    QRect,
     QRunnable,
     QSize,
     QThreadPool,
@@ -1335,6 +1336,10 @@ class MainWindow(QMainWindow):
         self._last_app_stylesheet: Optional[str] = None
         self._last_app_font_point: Optional[int] = None
         self._backdrop_suspended = False
+        self._app_event_filter_installed = False
+        self._manual_resize_edges = Qt.Edge(0)
+        self._manual_resize_start_global: Optional[QPoint] = None
+        self._manual_resize_start_geometry: Optional[QRect] = None
         self._drag_poll_timer = QTimer(self)
         self._drag_poll_timer.setInterval(100)
         self._drag_poll_timer.timeout.connect(self._poll_drag_end)
@@ -1646,7 +1651,6 @@ class MainWindow(QMainWindow):
         self._frosted_overlay = FrostedOverlay(root)
         self._frosted_overlay.setGeometry(root.rect())
         self._frosted_overlay.raise_()
-        root.installEventFilter(self)
         self._apply_theme()
 
     def _build_settings_menu(self) -> None:
@@ -2608,6 +2612,10 @@ class MainWindow(QMainWindow):
             self._panel_had_focus = True
         if not self._resize_cursor_timer.isActive():
             self._resize_cursor_timer.start()
+        app = QApplication.instance()
+        if app is not None and not self._app_event_filter_installed:
+            app.installEventFilter(self)
+            self._app_event_filter_installed = True
         # The native handle only exists once shown; re-apply so a hidden-at-startup
         # window still gets the themed caption.
         self._apply_titlebar_theme()
@@ -2620,6 +2628,10 @@ class MainWindow(QMainWindow):
         self._panel_watch_timer.stop()
         self._resize_cursor_timer.stop()
         self._apply_resize_cursor(None)
+        app = QApplication.instance()
+        if app is not None and self._app_event_filter_installed:
+            app.removeEventFilter(self)
+            self._app_event_filter_installed = False
         super().hideEvent(event)
 
     def resizeEvent(self, event) -> None:
@@ -2629,53 +2641,6 @@ class MainWindow(QMainWindow):
         if overlay is not None and root is not None:
             overlay.setGeometry(root.rect())
             overlay.raise_()
-
-    def nativeEvent(self, event_type, message):
-        if sys.platform == "win32" and event_type == b"windows_generic_MSG":
-            try:
-                import ctypes
-                from ctypes import wintypes
-
-                msg = wintypes.MSG.from_address(int(message))
-                if msg.message == 0x0084 and not self.isMaximized():  # WM_NCHITTEST
-                    x = ctypes.c_short(msg.lParam & 0xFFFF).value
-                    y = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
-                    dpr = self.devicePixelRatioF() or 1.0
-                    local = self.mapFromGlobal(QPoint(int(x / dpr), int(y / dpr)))
-                    code = self._resize_hit_code(local)
-                    if code:
-                        return True, code
-            except Exception:
-                logger.debug("[UI] nativeEvent WM_NCHITTEST failed", exc_info=True)
-        return super().nativeEvent(event_type, message)
-
-    def _resize_hit_code(self, local: QPoint) -> int:
-        border = 6
-        width = self.width()
-        height = self.height()
-        x = local.x()
-        y = local.y()
-        left = x <= border
-        right = x >= width - border
-        top = y <= border
-        bottom = y >= height - border
-        if top and left:
-            return 13  # HTTOPLEFT
-        if top and right:
-            return 14  # HTTOPRIGHT
-        if bottom and left:
-            return 16  # HTBOTTOMLEFT
-        if bottom and right:
-            return 17  # HTBOTTOMRIGHT
-        if left:
-            return 10  # HTLEFT
-        if right:
-            return 11  # HTRIGHT
-        if top:
-            return 12  # HTTOP
-        if bottom:
-            return 15  # HTBOTTOM
-        return 0
 
     def _foreground_window_owner_is_self(self) -> Optional[bool]:
         """True if the current foreground window belongs to this process."""
@@ -2795,7 +2760,7 @@ class MainWindow(QMainWindow):
         return super().event(event)
 
     def _edge_resize_edges(self, local: QPoint):
-        border = 6
+        border = 12
         edges = Qt.Edge(0)
         if local.x() <= border:
             edges |= Qt.Edge.LeftEdge
@@ -2880,6 +2845,9 @@ class MainWindow(QMainWindow):
         if QApplication.mouseButtons() & Qt.MouseButton.LeftButton:
             return
         self._drag_poll_timer.stop()
+        self._manual_resize_edges = Qt.Edge(0)
+        self._manual_resize_start_global = None
+        self._manual_resize_start_geometry = None
         if self._backdrop_suspended:
             self._backdrop_suspended = False
             self._last_backdrop_state = None
@@ -2890,7 +2858,7 @@ class MainWindow(QMainWindow):
     def _try_edge_resize(self, watched, event: QEvent) -> bool:
         if sys.platform != "win32" or event.type() != QEvent.Type.MouseButtonPress:
             return False
-        if watched is not self.centralWidget():
+        if not isinstance(watched, QWidget) or watched.window() is not self:
             return False
         if not self.isVisible() or self.isMaximized():
             return False
@@ -2904,14 +2872,67 @@ class MainWindow(QMainWindow):
         edges = self._edge_resize_edges(self.mapFromGlobal(global_pos))
         if not edges:
             return False
-        handle = self.windowHandle()
-        if handle is None:
-            return False
         self.begin_system_drag()
-        handle.startSystemResize(edges)
+        self._manual_resize_edges = edges
+        self._manual_resize_start_global = global_pos
+        self._manual_resize_start_geometry = QRect(self.geometry())
         return True
 
+    def _manual_resize_geometry(self, delta: QPoint) -> QRect:
+        start = self._manual_resize_start_geometry
+        if start is None:
+            return QRect(self.geometry())
+        edges = self._manual_resize_edges
+        left = start.left()
+        top = start.top()
+        right = start.right()
+        bottom = start.bottom()
+        min_width = max(1, self.minimumWidth())
+        min_height = max(1, self.minimumHeight())
+        if edges & Qt.Edge.LeftEdge:
+            left += delta.x()
+        if edges & Qt.Edge.RightEdge:
+            right += delta.x()
+        if edges & Qt.Edge.TopEdge:
+            top += delta.y()
+        if edges & Qt.Edge.BottomEdge:
+            bottom += delta.y()
+        if right - left + 1 < min_width:
+            if edges & Qt.Edge.LeftEdge:
+                left = right - min_width + 1
+            else:
+                right = left + min_width - 1
+        if bottom - top + 1 < min_height:
+            if edges & Qt.Edge.TopEdge:
+                top = bottom - min_height + 1
+            else:
+                bottom = top + min_height - 1
+        return QRect(left, top, right - left + 1, bottom - top + 1)
+
+    def _apply_manual_resize(self, event: QEvent) -> None:
+        if self._manual_resize_start_global is None:
+            return
+        try:
+            current = event.globalPosition().toPoint()
+        except Exception:
+            return
+        delta = current - self._manual_resize_start_global
+        self.setGeometry(self._manual_resize_geometry(delta))
+
     def eventFilter(self, watched, event: QEvent) -> bool:
+        if (
+            self._manual_resize_edges
+            and isinstance(watched, QWidget)
+            and watched.window() is self
+        ):
+            if event.type() == QEvent.Type.MouseMove:
+                self._apply_manual_resize(event)
+                return True
+            if event.type() == QEvent.Type.MouseButtonRelease:
+                self._manual_resize_edges = Qt.Edge(0)
+                self._manual_resize_start_global = None
+                self._manual_resize_start_geometry = None
+                return True
         if self._try_edge_resize(watched, event):
             return True
         if watched is self.search_input and event.type() == QEvent.Type.KeyPress:

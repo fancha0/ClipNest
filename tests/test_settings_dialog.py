@@ -245,6 +245,90 @@ class SettingsDialogApplyTests(unittest.TestCase):
     def test_registration_validator_rejects_invalid_format(self) -> None:
         self.assertIsNotNone(HotkeyService.validate_registration("A"))
 
+    def test_resize_hit_zone_reaches_visible_glass_edge(self) -> None:
+        from PySide6.QtCore import QPoint, Qt
+
+        dialog = self._make_dialog()
+        dialog.resize(820, 680)
+        cases = {
+            QPoint(8, 340): Qt.Edge.LeftEdge,
+            QPoint(812, 340): Qt.Edge.RightEdge,
+            QPoint(400, 8): Qt.Edge.TopEdge,
+            QPoint(400, 672): Qt.Edge.BottomEdge,
+            QPoint(8, 8): Qt.Edge.LeftEdge | Qt.Edge.TopEdge,
+            QPoint(812, 672): Qt.Edge.RightEdge | Qt.Edge.BottomEdge,
+            QPoint(400, 340): Qt.Edge(0),
+        }
+        for point, expected in cases.items():
+            with self.subTest(point=point):
+                self.assertEqual(dialog._edge_resize_edges(point), expected)
+
+    def test_edge_drag_resizes_dialog(self) -> None:
+        from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
+        from PySide6.QtGui import QMouseEvent
+        from PySide6.QtWidgets import QApplication
+
+        app = QApplication.instance() or QApplication([])
+        dialog = self._make_dialog()
+        dialog.resize(820, 680)
+        dialog.show()
+        app.processEvents()
+        target = dialog._glass_root
+        start = dialog.mapToGlobal(QPoint(dialog.width() - 4, dialog.height() // 2))
+
+        def send(event_type, global_pos, button, buttons) -> None:
+            local = target.mapFromGlobal(global_pos)
+            event = QMouseEvent(
+                event_type,
+                QPointF(local),
+                QPointF(global_pos),
+                button,
+                buttons,
+                Qt.KeyboardModifier.NoModifier,
+            )
+            app.sendEvent(target, event)
+            app.processEvents()
+
+        start_width = dialog.width()
+        send(
+            QEvent.Type.MouseButtonPress,
+            start,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+        )
+        send(
+            QEvent.Type.MouseMove,
+            start + QPoint(40, 0),
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.LeftButton,
+        )
+        send(
+            QEvent.Type.MouseButtonRelease,
+            start + QPoint(40, 0),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.NoButton,
+        )
+        self.assertEqual(dialog.width(), start_width + 40)
+        dialog.hide()
+        dialog.deleteLater()
+
+    def test_manual_resize_geometry_respects_edges_and_minimum(self) -> None:
+        from PySide6.QtCore import QPoint, QRect, Qt
+
+        dialog = self._make_dialog()
+        dialog.setMinimumSize(700, 560)
+        dialog._manual_resize_edges = Qt.Edge.RightEdge | Qt.Edge.BottomEdge
+        dialog._manual_resize_start_geometry = QRect(100, 100, 820, 680)
+        grown = dialog._manual_resize_geometry(QPoint(40, 20))
+        self.assertEqual(grown, QRect(100, 100, 860, 700))
+
+        dialog._manual_resize_edges = Qt.Edge.LeftEdge | Qt.Edge.TopEdge
+        clamped = dialog._manual_resize_geometry(QPoint(1000, 1000))
+        self.assertEqual(clamped.width(), 700)
+        self.assertEqual(clamped.height(), 560)
+        self.assertEqual(clamped.right(), 919)
+        self.assertEqual(clamped.bottom(), 779)
+
 
 class SettingsDialogGlassTests(unittest.TestCase):
     def test_window_is_frameless_and_translucent(self) -> None:

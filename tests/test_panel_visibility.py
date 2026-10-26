@@ -27,6 +27,91 @@ class PanelVisibilityTests(unittest.TestCase):
         self.assertTrue(bool(window.windowFlags() & Qt.WindowType.FramelessWindowHint))
         window.deleteLater()
 
+    def test_resize_hit_zone_reaches_visible_glass_edge(self) -> None:
+        from PySide6.QtCore import QPoint
+
+        window = MainWindow()
+        window.resize(800, 560)
+        cases = {
+            QPoint(8, 280): Qt.Edge.LeftEdge,
+            QPoint(792, 280): Qt.Edge.RightEdge,
+            QPoint(400, 8): Qt.Edge.TopEdge,
+            QPoint(400, 552): Qt.Edge.BottomEdge,
+            QPoint(8, 8): Qt.Edge.LeftEdge | Qt.Edge.TopEdge,
+            QPoint(792, 552): Qt.Edge.RightEdge | Qt.Edge.BottomEdge,
+            QPoint(400, 280): Qt.Edge(0),
+        }
+        for point, expected in cases.items():
+            with self.subTest(point=point):
+                self.assertEqual(window._edge_resize_edges(point), expected)
+        window.deleteLater()
+
+    def test_edge_drag_resizes_window(self) -> None:
+        from PySide6.QtCore import QEvent, QPoint, QPointF
+        from PySide6.QtGui import QMouseEvent
+
+        app = QApplication.instance() or QApplication([])
+        window = MainWindow()
+        window.resize(800, 560)
+        window.show()
+        app.processEvents()
+        target = window.centralWidget()
+        start = window.mapToGlobal(QPoint(window.width() - 4, window.height() // 2))
+
+        def send(event_type, global_pos, button, buttons) -> None:
+            local = target.mapFromGlobal(global_pos)
+            event = QMouseEvent(
+                event_type,
+                QPointF(local),
+                QPointF(global_pos),
+                button,
+                buttons,
+                Qt.KeyboardModifier.NoModifier,
+            )
+            app.sendEvent(target, event)
+            app.processEvents()
+
+        start_width = window.width()
+        send(
+            QEvent.Type.MouseButtonPress,
+            start,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+        )
+        send(
+            QEvent.Type.MouseMove,
+            start + QPoint(50, 0),
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.LeftButton,
+        )
+        send(
+            QEvent.Type.MouseButtonRelease,
+            start + QPoint(50, 0),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.NoButton,
+        )
+        self.assertEqual(window.width(), start_width + 50)
+        window.hide()
+        window.deleteLater()
+
+    def test_manual_resize_geometry_respects_edges_and_minimum(self) -> None:
+        from PySide6.QtCore import QPoint, QRect
+
+        window = MainWindow()
+        window.setMinimumSize(500, 360)
+        window._manual_resize_edges = Qt.Edge.RightEdge | Qt.Edge.BottomEdge
+        window._manual_resize_start_geometry = QRect(100, 100, 800, 560)
+        grown = window._manual_resize_geometry(QPoint(50, 30))
+        self.assertEqual(grown, QRect(100, 100, 850, 590))
+
+        window._manual_resize_edges = Qt.Edge.LeftEdge | Qt.Edge.TopEdge
+        clamped = window._manual_resize_geometry(QPoint(1000, 1000))
+        self.assertEqual(clamped.width(), 500)
+        self.assertEqual(clamped.height(), 360)
+        self.assertEqual(clamped.right(), 899)
+        self.assertEqual(clamped.bottom(), 659)
+        window.deleteLater()
+
     def test_titlebar_collapse_hides_panel(self) -> None:
         window = MainWindow()
         window.show()
