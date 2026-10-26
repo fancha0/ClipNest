@@ -1301,6 +1301,7 @@ class MainWindow(QMainWindow):
     delete_item_requested = Signal(int)
     clear_items_requested = Signal(int)
     item_activated = Signal(int)
+    item_paste_text_requested = Signal(int)
     export_requested = Signal()
     import_requested = Signal()
     search_text_changed = Signal(str)
@@ -3359,21 +3360,51 @@ class MainWindow(QMainWindow):
             return
         self._last_selected_item_id = int(item_id)
 
-    def _activate_item(self, item: Optional[QListWidgetItem]) -> bool:
+    def _activate_item(
+        self,
+        item: Optional[QListWidgetItem],
+        *,
+        as_text: bool = False,
+    ) -> bool:
         if item is None:
             return False
         item_id = item.data(ITEM_ID_ROLE)
         if item_id is None:
             return False
         self._last_selected_item_id = int(item_id)
-        self.item_activated.emit(int(item_id))
+        if as_text:
+            self.item_paste_text_requested.emit(int(item_id))
+        else:
+            self.item_activated.emit(int(item_id))
         return True
 
     def _activate_current_item(self) -> bool:
         return self._activate_item(self.item_list.currentItem())
 
     def _on_item_clicked(self, item: QListWidgetItem) -> None:
-        self._activate_item(item)
+        as_text = bool(
+            QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier
+        )
+        self._activate_item(item, as_text=as_text)
+
+    def _add_paste_mode_menu(
+        self,
+        menu: QMenu,
+        item: QListWidgetItem,
+        dark: bool,
+    ) -> tuple[QAction, QAction]:
+        paste_menu = menu.addMenu(menu_icon("copy", dark), "粘贴方式")
+        paste_menu.setObjectName("glassMenu")
+        paste_menu.setStyleSheet(self._menu_stylesheet())
+        paste_default_action = paste_menu.addAction("保留原格式")
+        paste_text_action = paste_menu.addAction("粘贴为纯文本")
+        plain_text = str(item.data(ITEM_TEXT_ROLE) or "").strip()
+        paste_text_action.setEnabled(bool(plain_text))
+        if plain_text:
+            paste_text_action.setToolTip("按住 Shift 单击条目也可快速纯文本粘贴")
+        else:
+            paste_text_action.setToolTip("该条目没有可粘贴的文本")
+        return paste_default_action, paste_text_action
 
     def _open_item_context_menu(self, pos) -> None:
         current_tab_id = self.current_tab_id()
@@ -3405,6 +3436,10 @@ class MainWindow(QMainWindow):
             item_id = int(item.data(ITEM_ID_ROLE))
             is_pinned = bool(item.data(ITEM_PINNED_ROLE))
             dark = bool(self._theme_tokens.is_dark)
+            paste_default_action, paste_text_action = self._add_paste_mode_menu(
+                menu, item, dark
+            )
+            menu.addSeparator()
             pin_action = menu.addAction(
                 menu_icon("pin", dark),
                 "取消置顶" if is_pinned else "置顶条目",
@@ -3423,7 +3458,11 @@ class MainWindow(QMainWindow):
             clear_action = menu.addAction(menu_icon("clear", dark, danger=True), "清空列表")
             with self._with_auto_hide_suspended():
                 selected = menu.exec(self.item_list.mapToGlobal(pos))
-            if selected == pin_action:
+            if selected == paste_default_action:
+                self.item_activated.emit(item_id)
+            elif selected == paste_text_action:
+                self.item_paste_text_requested.emit(item_id)
+            elif selected == pin_action:
                 self.item_pin_change_requested.emit(item_id, not is_pinned)
             elif selected == edit_action:
                 self.start_inline_edit_requested.emit(item_id)

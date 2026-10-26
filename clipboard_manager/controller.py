@@ -305,6 +305,9 @@ class AppController:
         self._window.clear_items_requested.connect(self._on_clear_items)
         self._window.move_items_requested.connect(self._on_move_items_to_tab)
         self._window.item_activated.connect(self._on_item_activated)
+        self._window.item_paste_text_requested.connect(
+            self._on_item_paste_text_requested
+        )
         self._window.settings_save_requested.connect(self._on_settings_save_requested)
         self._window.export_requested.connect(self._on_export_requested)
         self._window.import_requested.connect(self._on_import_requested)
@@ -1033,6 +1036,65 @@ class AppController:
         logger.info("[Paste] service accepted id=%s type=%s", item_id, item.content_type)
         self._repository.mark_item_used(item_id)
         self._pending_focus_target = None
+
+    def _on_item_paste_text_requested(self, item_id: int) -> None:
+        item = self._repository.get_item(item_id)
+        if item is None:
+            logger.warning("[Paste] plain-text item not found id=%s", item_id)
+            return
+        text = self._resolve_item_plain_text(item_id, item.plain_text or item.text)
+        if not text:
+            self._window.show_error("该条目没有可粘贴的文本。")
+            return
+        hide_window_cb = self._window.hide if self._auto_hide_on_paste else None
+        pasted = self._paste_service.paste_text(
+            text,
+            self._pending_focus_target,
+            hide_window=hide_window_cb,
+        )
+        if not pasted:
+            logger.warning("[Paste] plain-text service returned false id=%s", item_id)
+            self._window.show_error("粘贴失败，请重试。")
+            return
+        logger.info("[Paste] plain-text accepted id=%s type=%s", item_id, item.content_type)
+        self._repository.mark_item_used(item_id)
+        self._pending_focus_target = None
+
+    def _resolve_item_plain_text(self, item_id: int, initial_text: str) -> str:
+        text = str(initial_text or "").strip()
+        if text:
+            return text
+        payload = self._repository.get_item_payload_typed(item_id)
+        if payload is None:
+            return ""
+        text = str(payload.get("plain_text") or payload.get("text") or "").strip()
+        if text:
+            return text
+        file_paths = payload.get("file_paths") or []
+        text = "\n".join(
+            str(path).strip() for path in file_paths if str(path).strip()
+        )
+        if text:
+            return text
+        for part in payload.get("raw_parts") or []:
+            mime_type = str(
+                getattr(part, "mime_type", "")
+                or (part.get("mime_type", "") if isinstance(part, dict) else "")
+            ).lower()
+            if not mime_type.startswith("text/plain"):
+                continue
+            blob = getattr(part, "payload_blob", None)
+            if blob is None and isinstance(part, dict):
+                blob = part.get("payload_blob", b"")
+            if blob is None:
+                blob = b""
+            try:
+                candidate = bytes(blob).decode("utf-8")
+            except UnicodeDecodeError:
+                candidate = bytes(blob).decode("utf-8", "replace")
+            if candidate.strip():
+                return candidate.strip()
+        return ""
 
     def _on_clipboard_parsed_captured(self, parsed: ParsedClipboardItem) -> None:
         if self._maintenance_mode:
