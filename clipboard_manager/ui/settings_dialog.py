@@ -49,6 +49,7 @@ from .settings_widgets import (
 )
 from ..version import APP_VERSION
 from ..config import app_data_dir, default_hotkey, log_file_path
+from ..services.hotkey_service import HotkeyService
 
 PRESET_COLORS = {
     "简约白": ("#f6f9ff", "#ffffff", "#8fc1f3"),
@@ -160,8 +161,13 @@ class SettingsDialog(ResizableDialog):
         self._data_stats = dict(data_stats or {})
         self._export_requested = False
         self._import_requested = False
+        self._hotkey_validate_timer = QTimer(self)
+        self._hotkey_validate_timer.setSingleShot(True)
+        self._hotkey_validate_timer.setInterval(300)
+        self._hotkey_validate_timer.timeout.connect(self._refresh_hotkey_validation)
 
         self._build_ui()
+        self._refresh_hotkey_validation(probe=False)
 
     # ---------- UI scaffolding ----------
 
@@ -243,7 +249,7 @@ class SettingsDialog(ResizableDialog):
         cancel_btn = buttons.button(QDialogButtonBox.StandardButton.Cancel)
         if cancel_btn is not None:
             cancel_btn.setText("取消")
-        buttons.accepted.connect(self.accept)
+        buttons.accepted.connect(self._on_save_clicked)
         buttons.rejected.connect(self.reject)
         footer_layout.addWidget(buttons)
         root.addWidget(footer)
@@ -390,6 +396,12 @@ class SettingsDialog(ResizableDialog):
         )
         layout.addWidget(section)
 
+        self.hotkey_validation_label = QLabel(page)
+        self.hotkey_validation_label.setObjectName("hotkeyValidationLabel")
+        self.hotkey_validation_label.setWordWrap(True)
+        self.hotkey_validation_label.setVisible(False)
+        layout.addWidget(self.hotkey_validation_label)
+
         capture_section = SettingsSection("剪贴板监听", page)
         self.capture_enabled_chk = ToggleSwitch(page)
         self.capture_enabled_chk.setAccessibleName("自动记录剪贴板")
@@ -425,6 +437,10 @@ class SettingsDialog(ResizableDialog):
         self.hotkey_edit.keySequenceChanged.connect(self._refresh_shortcut_overview)
         self.capture_toggle_hotkey_edit.keySequenceChanged.connect(
             self._refresh_shortcut_overview
+        )
+        self.hotkey_edit.keySequenceChanged.connect(self._queue_hotkey_validation)
+        self.capture_toggle_hotkey_edit.keySequenceChanged.connect(
+            self._queue_hotkey_validation
         )
         layout.addStretch(1)
         return page
@@ -939,7 +955,85 @@ class SettingsDialog(ResizableDialog):
 
     # ---------- results ----------
 
+    def _queue_hotkey_validation(self, *_args) -> None:
+        if self.isVisible():
+            self._hotkey_validate_timer.start()
+
+    @staticmethod
+    def _normalize_hotkey_text(text: str) -> tuple[str, str]:
+        normalized, error = HotkeyService.normalize_hotkey(str(text or ""))
+        return (normalized or ""), (error or "")
+
+    def _set_hotkey_invalid(self, edit: QKeySequenceEdit, invalid: bool) -> None:
+        edit.setProperty("invalid", bool(invalid))
+        edit.style().unpolish(edit)
+        edit.style().polish(edit)
+
+    def _refresh_hotkey_validation(self, probe: bool = True) -> bool:
+        open_norm, open_error = self._normalize_hotkey_text(
+            self.hotkey_edit.keySequence().toString(
+                QKeySequence.SequenceFormat.PortableText
+            )
+        )
+        toggle_norm, toggle_error = self._normalize_hotkey_text(
+            self.capture_toggle_hotkey_edit.keySequence().toString(
+                QKeySequence.SequenceFormat.PortableText
+            )
+        )
+        open_invalid = bool(open_error)
+        toggle_invalid = bool(toggle_error)
+        messages: list[str] = []
+        if open_error:
+            messages.append(f"打开面板快捷键无效：{open_error}")
+        if toggle_error:
+            messages.append(f"暂停/恢复监听快捷键无效：{toggle_error}")
+
+        if open_norm and toggle_norm and open_norm == toggle_norm:
+            open_invalid = True
+            toggle_invalid = True
+            messages = ["打开面板和暂停/恢复监听不能使用同一个快捷键。"]
+
+        if not messages and probe:
+            probe_fields = (
+                ("打开面板", open_norm, self._hotkey_initial, True),
+                (
+                    "暂停/恢复监听",
+                    toggle_norm,
+                    self._capture_toggle_hotkey_initial,
+                    False,
+                ),
+            )
+            for label, current, initial, is_open in probe_fields:
+                if not current:
+                    continue
+                initial_norm, _ = self._normalize_hotkey_text(initial)
+                if current == initial_norm:
+                    continue
+                error = HotkeyService.validate_registration(current)
+                if error:
+                    messages.append(f"{label}快捷键注册失败：{error}")
+                    if is_open:
+                        open_invalid = True
+                    else:
+                        toggle_invalid = True
+                    break
+
+        text = "；".join(messages)
+        self.hotkey_validation_label.setText(text)
+        self.hotkey_validation_label.setToolTip(text)
+        self.hotkey_validation_label.setVisible(bool(text))
+        self._set_hotkey_invalid(self.hotkey_edit, open_invalid)
+        self._set_hotkey_invalid(self.capture_toggle_hotkey_edit, toggle_invalid)
+        return not text
+
+    def _on_save_clicked(self) -> None:
+        if not self._refresh_hotkey_validation(probe=True):
+            return
+        self.accept()
+
     def _on_apply_clicked(self) -> None:
+        if not self._refresh_hotkey_validation(probe=True):
+            return
         self.apply_requested.emit(self.result_payload())
 
     def _apply_settings_filter(self, text: str) -> None:

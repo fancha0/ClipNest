@@ -202,6 +202,29 @@ class HotkeyService(QObject):
         return False
 
     @classmethod
+    def validate_registration(cls, hotkey_text: str) -> Optional[str]:
+        """Best-effort preflight without touching the app's active hotkeys."""
+        normalized, normalize_error = cls.normalize_hotkey(hotkey_text)
+        if normalize_error or not normalized:
+            return normalize_error or "快捷键格式无效"
+        combo, error = cls._build_and_validate_combo(normalized)
+        if error:
+            return error
+        listener = None
+        try:
+            listener = keyboard.GlobalHotKeys({combo: lambda: None})
+            listener.start()
+            return None
+        except Exception as exc:
+            return str(exc) or "快捷键注册失败"
+        finally:
+            if listener is not None:
+                try:
+                    listener.stop()
+                except Exception:
+                    logger.debug("[Hotkey] probe listener stop failed", exc_info=True)
+
+    @classmethod
     def _build_and_validate_combo(cls, hotkey_text: str) -> tuple[Optional[str], Optional[str]]:
         combo = cls._to_pynput_combo(hotkey_text)
         try:

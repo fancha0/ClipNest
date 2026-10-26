@@ -786,6 +786,10 @@ def _build_app_stylesheet_cached(tokens: ThemeTokens) -> str:
         QLineEdit:focus, QTextEdit:focus, QKeySequenceEdit:focus {{
             border: 1px solid {tokens.input_focus_border};
         }}
+        QKeySequenceEdit[invalid="true"] {{
+            border: 1px solid #d0534b;
+            background: rgba(209, 83, 75, 20);
+        }}
         QSpinBox, QDoubleSpinBox {{
             background: {tokens.input_bg};
             color: {tokens.text_primary};
@@ -1034,6 +1038,11 @@ def _build_app_stylesheet_cached(tokens: ThemeTokens) -> str:
         }}
         QLabel#settingsApplyStatus {{
             color: {tokens.text_secondary};
+        }}
+        QLabel#hotkeyValidationLabel {{
+            color: #c2413d;
+            font-size: {max(10, tokens.base_font_size - 2)}px;
+            padding: 0 2px;
         }}
         QLabel#aboutAppName {{
             font-size: 20px;

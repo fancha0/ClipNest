@@ -187,6 +187,64 @@ class SettingsDialogApplyTests(unittest.TestCase):
         grid.apply_filter("")
         self.assertTrue(all(not cell.isHidden() for cell in grid._cells))
 
+    def test_duplicate_hotkeys_show_inline_error_and_block_apply(self) -> None:
+        dialog = self._make_dialog()
+        dialog.hotkey_edit.setKeySequence(QKeySequence("Ctrl+Shift+P"))
+        self.assertFalse(dialog._refresh_hotkey_validation(probe=False))
+        self.assertIn("不能使用同一个快捷键", dialog.hotkey_validation_label.text())
+        self.assertTrue(dialog.hotkey_edit.property("invalid"))
+        self.assertTrue(dialog.capture_toggle_hotkey_edit.property("invalid"))
+        received: list = []
+        dialog.apply_requested.connect(received.append)
+        dialog._on_apply_clicked()
+        self.assertEqual(received, [])
+
+    def test_invalid_hotkey_format_shows_inline_error(self) -> None:
+        dialog = self._make_dialog()
+        dialog.hotkey_edit.setKeySequence(QKeySequence("A"))
+        self.assertFalse(dialog._refresh_hotkey_validation(probe=False))
+        self.assertIn("快捷键无效", dialog.hotkey_validation_label.text())
+        self.assertTrue(dialog.hotkey_edit.property("invalid"))
+
+    def test_registration_failure_shows_inline_error(self) -> None:
+        from unittest.mock import patch
+
+        dialog = self._make_dialog()
+        dialog.hotkey_edit.setKeySequence(QKeySequence("Ctrl+Alt+K"))
+        with patch.object(
+            HotkeyService,
+            "validate_registration",
+            return_value="被其他程序占用",
+        ):
+            self.assertFalse(dialog._refresh_hotkey_validation(probe=True))
+        self.assertIn("注册失败", dialog.hotkey_validation_label.text())
+        self.assertIn("被其他程序占用", dialog.hotkey_validation_label.text())
+        self.assertTrue(dialog.hotkey_edit.property("invalid"))
+
+    def test_valid_hotkey_clears_error_and_can_apply(self) -> None:
+        from unittest.mock import patch
+
+        dialog = self._make_dialog()
+        dialog.hotkey_edit.setKeySequence(QKeySequence("Ctrl+Alt+K"))
+        with patch.object(HotkeyService, "validate_registration", return_value=None):
+            self.assertTrue(dialog._refresh_hotkey_validation(probe=True))
+            received: list = []
+            dialog.apply_requested.connect(received.append)
+            dialog._on_apply_clicked()
+        self.assertTrue(dialog.hotkey_validation_label.isHidden())
+        self.assertFalse(dialog.hotkey_edit.property("invalid"))
+        self.assertEqual(len(received), 1)
+
+    def test_save_is_blocked_on_hotkey_conflict(self) -> None:
+        dialog = self._make_dialog()
+        dialog.hotkey_edit.setKeySequence(QKeySequence("Ctrl+Shift+P"))
+        dialog._on_save_clicked()
+        self.assertEqual(dialog.result(), 0)
+        self.assertIn("不能使用同一个快捷键", dialog.hotkey_validation_label.text())
+
+    def test_registration_validator_rejects_invalid_format(self) -> None:
+        self.assertIsNotNone(HotkeyService.validate_registration("A"))
+
 
 class SettingsDialogGlassTests(unittest.TestCase):
     def test_window_is_frameless_and_translucent(self) -> None:
