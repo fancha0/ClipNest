@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img alt="Platform" src="https://img.shields.io/badge/platform-Windows-0078D6?logo=windows" />
+  <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-0078D6?logo=windows" />
   <img alt="Python" src="https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white" />
   <img alt="Qt" src="https://img.shields.io/badge/UI-PySide6-41CD52?logo=qt&logoColor=white" />
   <a href="https://github.com/fancha0/ClipNest/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/fancha0/ClipNest" /></a>
@@ -45,6 +45,14 @@ ClipNest 常驻后台，安静地记录你复制过的**文字、图片、文件
 
 ---
 
+## 💻 系统要求
+
+- Windows 10 1809（build 17763）或更新版本，或 Windows 11
+- 64 位系统（x64）
+- 不支持 Windows 7 / 8 / 8.1 及 32 位系统
+
+---
+
 ## 📦 安装
 
 ### 方式一：安装包（推荐）
@@ -54,6 +62,8 @@ ClipNest 常驻后台，安静地记录你复制过的**文字、图片、文件
 3. 安装后开始菜单出现 **ClipNest**，可在“设置 → 应用”中卸载
 
 > 免管理员权限，默认安装到当前用户目录：`%LOCALAPPDATA%\Programs\ClipNest`
+>
+> 安装包会检测系统版本，Windows 10 1809 以下会被拒绝安装。
 
 ### 方式二：便携版
 

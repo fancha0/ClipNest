@@ -41,6 +41,7 @@ OutputBaseFilename=ClipNest-Setup
 Compression=lzma2/ultra64
 SolidCompression=yes
 
+MinVersion=10.0.17763
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 
