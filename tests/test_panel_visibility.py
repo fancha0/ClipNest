@@ -112,6 +112,18 @@ class PanelVisibilityTests(unittest.TestCase):
         self.assertEqual(clamped.bottom(), 659)
         window.deleteLater()
 
+    def test_titlebar_close_hides_to_tray(self) -> None:
+        window = MainWindow()
+        window.show()
+        QApplication.processEvents()
+        self.assertTrue(window.isVisible())
+        window._title_bar._close_btn.click()
+        QApplication.processEvents()
+        self.assertFalse(window.isVisible())
+        self.assertFalse(window._allow_close)
+        self.assertIn("隐藏", window._title_bar._close_btn.toolTip())
+        window.deleteLater()
+
     def test_titlebar_collapse_hides_panel(self) -> None:
         window = MainWindow()
         window.show()

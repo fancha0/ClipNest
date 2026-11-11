@@ -73,6 +73,9 @@ class TitleBar(QWidget):
     def set_close_visible(self, visible: bool) -> None:
         self._close_btn.setVisible(bool(visible))
 
+    def set_close_tooltip(self, tooltip: str) -> None:
+        self._close_btn.setToolTip(str(tooltip))
+
     def set_maximize_enabled(self, enabled: bool) -> None:
         self._maximize_enabled = bool(enabled)
 

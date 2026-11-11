@@ -1450,7 +1450,8 @@ class MainWindow(QMainWindow):
         icon_pixmap = self.windowIcon().pixmap(18, 18)
         self._title_bar = TitleBar(APP_NAME, icon_pixmap, root)
         self._title_bar.collapse_requested.connect(self._on_titlebar_collapse)
-        self._title_bar.quit_requested.connect(self._quit_application)
+        self._title_bar.set_close_tooltip("隐藏到托盘")
+        self._title_bar.quit_requested.connect(self._on_titlebar_close)
         outer.addWidget(self._title_bar)
 
         self._main_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -2602,6 +2603,10 @@ class MainWindow(QMainWindow):
 
     def _on_titlebar_collapse(self) -> None:
         self._hide_panel()
+
+    def _on_titlebar_close(self) -> None:
+        self._hide_panel()
+        self._show_tray_hint_once()
 
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
