@@ -402,6 +402,10 @@ class AppController:
                 "appearance_backdrop_blur",
                 defaults.backdrop_blur,
             ),
+            show_item_type=self._parse_bool_setting(
+                "appearance_show_item_type",
+                defaults.show_item_type,
+            ),
         )
 
     def _save_appearance_settings(self, appearance: AppearanceSettings) -> None:
@@ -416,6 +420,9 @@ class AppController:
         self._repository.set_setting("appearance_accent_color", appearance.accent_color)
         self._repository.set_setting(
             "appearance_backdrop_blur", "1" if appearance.backdrop_blur else "0"
+        )
+        self._repository.set_setting(
+            "appearance_show_item_type", "1" if appearance.show_item_type else "0"
         )
 
     def _system_dark(self) -> bool:
@@ -588,6 +595,7 @@ class AppController:
             glass_strength=normalize_glass_strength(appearance.glass_strength),
             accent_color=normalize_accent_color(appearance.accent_color),
             backdrop_blur=bool(getattr(appearance, "backdrop_blur", True)),
+            show_item_type=bool(getattr(appearance, "show_item_type", False)),
         )
         try:
             self._save_appearance_settings(normalized)

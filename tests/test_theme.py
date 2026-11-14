@@ -67,6 +67,7 @@ class PresetTests(unittest.TestCase):
         self.assertEqual(appearance.theme_style, "eye_green")
         self.assertEqual(appearance.glass_strength, "transparent")
         self.assertEqual(appearance.accent_color, "auto")
+        self.assertFalse(appearance.show_item_type)
 
     def test_graphite_night_style_builds_dark_tokens(self) -> None:
         appearance = dataclasses.replace(

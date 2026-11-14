@@ -115,6 +115,7 @@ class PresentItemTimeTests(unittest.TestCase):
             row.secondary_text.startswith("刚刚"),
             f"unexpected secondary text: {row.secondary_text}",
         )
+        self.assertIn("类型：文本", row.tooltip_text)
 
 
 if __name__ == "__main__":

@@ -65,6 +65,7 @@ class ClipItemDelegate(QStyledItemDelegate):
         self._note_font_size = int(note_font_size)
         self._tokens = tokens or default_light_business_theme()
         self._antialias_enabled = True
+        self._show_item_type = True
 
     def set_note_style(self, note_color: str, note_font_size: int) -> None:
         self._note_color = QColor(note_color)
@@ -81,6 +82,16 @@ class ClipItemDelegate(QStyledItemDelegate):
 
     def set_antialias_enabled(self, enabled: bool) -> None:
         self._antialias_enabled = bool(enabled)
+
+    def set_show_item_type(self, enabled: bool) -> None:
+        enabled = bool(enabled)
+        if enabled == self._show_item_type:
+            return
+        self._show_item_type = enabled
+        parent = self.parent()
+        viewport = getattr(parent, "viewport", None)
+        if callable(viewport):
+            viewport().update()
 
     def sizeHint(self, option: QStyleOptionViewItem, index) -> QSize:
         base = super().sizeHint(option, index)
@@ -203,7 +214,7 @@ class ClipItemDelegate(QStyledItemDelegate):
         content_type = self._row_content_type(index)
         pill_rect = (
             self._draw_type_pill(painter, text_rect, type_label, content_type)
-            if type_label
+            if self._show_item_type and type_label
             else QRect()
         )
         main_rect = QRect(text_rect)

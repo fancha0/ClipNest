@@ -530,6 +530,9 @@ class SettingsDialog(ResizableDialog):
 
         self.show_scrollbar_chk = ToggleSwitch(page)
         self.show_scrollbar_chk.setChecked(bool(self._appearance.show_scrollbar))
+        self.show_item_type_chk = ToggleSwitch(page)
+        self.show_item_type_chk.setAccessibleName("显示条目类型")
+        self.show_item_type_chk.setChecked(bool(self._appearance.show_item_type))
         self.antialias_chk = ToggleSwitch(page)
         self.antialias_chk.setChecked(bool(self._appearance.item_antialias))
         self.backdrop_blur_chk = ToggleSwitch(page)
@@ -541,6 +544,13 @@ class SettingsDialog(ResizableDialog):
         display_section = SettingsSection("显示", page)
         display_section.add_row(SettingRow("全局字体大小", self.font_size_spin))
         display_section.add_row(SettingRow("显示滚动条", self.show_scrollbar_chk))
+        display_section.add_row(
+            SettingRow(
+                "显示条目类型",
+                self.show_item_type_chk,
+                "在条目右上角显示文本、图片、图文等类型标签；关闭后仍可在悬浮提示中查看。",
+            )
+        )
         display_section.add_row(
             SettingRow("条目抗锯齿", self.antialias_chk, "关闭后绘制更快，边缘略硬。")
         )
@@ -945,6 +955,7 @@ class SettingsDialog(ResizableDialog):
         self._appearance = default_appearance_settings()
         self.font_size_spin.setValue(int(self._appearance.font_size))
         self.show_scrollbar_chk.setChecked(bool(self._appearance.show_scrollbar))
+        self.show_item_type_chk.setChecked(bool(self._appearance.show_item_type))
         self.antialias_chk.setChecked(bool(self._appearance.item_antialias))
         self.backdrop_blur_chk.setChecked(bool(self._appearance.backdrop_blur))
         self.window_bg_btn.set_color(self._appearance.window_bg)
@@ -1097,6 +1108,7 @@ class SettingsDialog(ResizableDialog):
                 backdrop_blur=bool(self.backdrop_blur_chk.isChecked()),
                 show_scrollbar=bool(self.show_scrollbar_chk.isChecked()),
                 item_antialias=bool(self.antialias_chk.isChecked()),
+                show_item_type=bool(self.show_item_type_chk.isChecked()),
             ),
             theme_mode=normalize_theme_mode(
                 str(self.theme_mode_segment.current_key() or "follow_system")

@@ -143,6 +143,16 @@ class RowNumberHintTests(unittest.TestCase):
 
 
 class ColoredTypePillTests(unittest.TestCase):
+    def test_type_pill_can_be_hidden(self) -> None:
+        model = _make_model(type_label="链接", content_type="url")
+        neutral_model = _make_model(type_label="", content_type="url")
+        delegate = _make_delegate()
+        delegate.set_show_item_type(False)
+        self.assertEqual(
+            _render_row(delegate, model),
+            _render_row(delegate, neutral_model),
+        )
+
     def test_accented_pill_differs_from_neutral_pill(self) -> None:
         model = _make_model(type_label="链接", content_type="url")
         neutral_model = _make_model(type_label="链接", content_type="")

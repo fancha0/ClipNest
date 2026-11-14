@@ -106,6 +106,12 @@ class SettingsDialogApplyTests(unittest.TestCase):
         self.assertFalse(appearance.show_scrollbar)
         self.assertFalse(appearance.item_antialias)
 
+    def test_show_item_type_toggle_reflected_in_payload(self) -> None:
+        dialog = self._make_dialog()
+        self.assertFalse(dialog.result_payload().appearance.show_item_type)
+        dialog.show_item_type_chk.setChecked(True)
+        self.assertTrue(dialog.result_payload().appearance.show_item_type)
+
     def test_font_size_reflected_in_payload(self) -> None:
         dialog = self._make_dialog()
         dialog.font_size_spin.setValue(20)

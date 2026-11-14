@@ -85,6 +85,7 @@ class AppearanceSettings:
     glass_strength: GlassStrength = "glass"
     accent_color: AccentColor = "auto"
     backdrop_blur: bool = True
+    show_item_type: bool = False
 
 
 def default_appearance_settings() -> AppearanceSettings:
@@ -99,6 +100,7 @@ def default_appearance_settings() -> AppearanceSettings:
         glass_strength="transparent",
         accent_color="auto",
         backdrop_blur=True,
+        show_item_type=False,
     )
 
 
@@ -114,6 +116,7 @@ def default_dark_appearance_settings() -> AppearanceSettings:
         glass_strength="transparent",
         accent_color="auto",
         backdrop_blur=True,
+        show_item_type=False,
     )
 
 
@@ -144,6 +147,7 @@ def effective_appearance(
             glass_strength=normalize_glass_strength(user_appearance.glass_strength),
             accent_color=normalize_accent_color(user_appearance.accent_color),
             backdrop_blur=bool(getattr(user_appearance, "backdrop_blur", True)),
+            show_item_type=bool(getattr(user_appearance, "show_item_type", False)),
         )
     return replace(
         user_appearance,

@@ -57,12 +57,13 @@ def present_item(item: ClipItem) -> DisplayRow:
         tooltip_sections.append("格式：\n" + "\n".join(item.mime_formats))
     if item.source_app:
         tooltip_sections.append(f"来源应用：{item.source_app}")
+    tooltip_sections.append(f"类型：{item_type}")
     tooltip = "\n---\n".join(section for section in tooltip_sections if section) or content
 
     icon_kind, file_icon_path = _resolve_icon(item)
     return DisplayRow(
         primary_text=primary or "[空内容]",
-        secondary_text=secondary or item_type,
+        secondary_text=secondary,
         tooltip_text=tooltip or "[空内容]",
         has_note=has_note,
         note_text=note,

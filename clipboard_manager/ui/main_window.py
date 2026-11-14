@@ -1622,6 +1622,7 @@ class MainWindow(QMainWindow):
             parent=self.item_list,
         )
         self._item_delegate.set_antialias_enabled(self._appearance.item_antialias)
+        self._item_delegate.set_show_item_type(self._appearance.show_item_type)
         self.item_list.setItemDelegate(self._item_delegate)
         right_layout.addWidget(self.item_list, 1)
 
@@ -2373,6 +2374,7 @@ class MainWindow(QMainWindow):
         if self._item_delegate is not None:
             self._item_delegate.set_theme_tokens(self._theme_tokens)
             self._item_delegate.set_antialias_enabled(appearance.item_antialias)
+            self._item_delegate.set_show_item_type(appearance.show_item_type)
         self._apply_theme()
         self._apply_titlebar_theme()
         self._apply_window_backdrop()
