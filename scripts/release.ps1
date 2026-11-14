@@ -106,7 +106,13 @@ try {
             url     = "$PublicBaseUrl/ClipNest-Windows.zip"
             size    = (Get-Item $zipPath).Length
             sha256  = $zipSha256
-        } | ConvertTo-Json
+        }
+        if ($setupPath -and (Test-Path -LiteralPath $setupPath)) {
+            $manifest.setup_url = "$PublicBaseUrl/ClipNest-Setup.exe"
+            $manifest.setup_size = (Get-Item $setupPath).Length
+            $manifest.setup_sha256 = (Get-FileHash -LiteralPath $setupPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
+        $manifest = $manifest | ConvertTo-Json
         [System.IO.File]::WriteAllText($manifestPath, $manifest, (New-Object System.Text.UTF8Encoding($false)))
 
         if ((Invoke-NativeCommand { ssh -p $SshPort $SshTarget "mkdir -p $RemoteDir" }) -ne 0) {

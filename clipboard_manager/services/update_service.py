@@ -13,7 +13,9 @@ import tempfile
 import time
 import urllib.request
 import zipfile
+from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 
@@ -57,6 +59,18 @@ def _build_ssl_context() -> ssl.SSLContext:
     return context
 
 
+def consume_update_error() -> bool:
+    """Consume the failure marker left by the portable ZIP updater."""
+    marker = os.path.join(tempfile.gettempdir(), "clipnest-update-error.txt")
+    if not os.path.isfile(marker):
+        return False
+    try:
+        os.remove(marker)
+    except OSError:
+        logger.debug("[Update] failed to remove update error marker", exc_info=True)
+    return True
+
+
 def cleanup_update_temp_dirs(max_age_seconds: int = 7 * 24 * 3600) -> None:
     """Remove stale update download/extract directories left by interrupted updates."""
     now = time.time()
@@ -73,6 +87,7 @@ def cleanup_update_temp_dirs(max_age_seconds: int = 7 * 24 * 3600) -> None:
 _REPO = "fancha0/ClipNest"
 _API_URL = f"https://api.github.com/repos/{_REPO}/releases/latest"
 _ASSET_NAME = "ClipNest-Windows.zip"
+_SETUP_NAME = "ClipNest-Setup.exe"
 _REQUEST_TIMEOUT = 15
 _MAX_UPDATE_SIZE = 1024 * 1024 * 1024
 _MAX_UPDATE_ENTRIES = 100_000
@@ -86,6 +101,16 @@ UPDATE_MANIFEST_URL = "https://fn.lshiya.top:18443/clipnest/latest.json"
 
 def is_frozen() -> bool:
     return bool(getattr(sys, "frozen", False))
+
+
+def is_installed_install() -> bool:
+    """True when the running exe belongs to an Inno Setup installation."""
+    if not is_frozen():
+        return False
+    try:
+        return (Path(sys.executable).resolve().parent / "unins000.exe").is_file()
+    except OSError:
+        return False
 
 
 def parse_version(text: str) -> tuple[int, ...]:
@@ -123,6 +148,17 @@ def _parse_manifest(payload: dict) -> Optional[dict]:
         size = int(payload.get("size") or 0)
     except (TypeError, ValueError):
         size = 0
+
+    setup_url = str(payload.get("setup_url") or "").strip()
+    setup_sha256 = str(payload.get("setup_sha256") or "").strip().lower()
+    try:
+        setup_size = int(payload.get("setup_size") or 0)
+    except (TypeError, ValueError):
+        setup_size = 0
+    if setup_url and not re.fullmatch(r"[0-9a-f]{64}", setup_sha256):
+        setup_url = ""
+        setup_size = 0
+
     return {
         "version": version,
         "tag": f"v{version}",
@@ -130,6 +166,9 @@ def _parse_manifest(payload: dict) -> Optional[dict]:
         "url": url,
         "size": size,
         "sha256": sha256,
+        "setup_url": setup_url,
+        "setup_size": setup_size,
+        "setup_sha256": setup_sha256,
     }
 
 
@@ -151,16 +190,16 @@ def build_updater_bat(source_dir: str, install_dir: str, exe_name: str) -> str:
     return (
         "@echo off\r\n"
         "chcp 65001 >nul\r\n"
-        "timeout /t 2 /nobreak >nul\r\n"
-        f'robocopy "{source_dir}" "{install_dir}" /E /NFL /NDL /NJH /NJS /NP /R:2 /W:2\r\n'
+        "ping -n 3 127.0.0.1 >nul\r\n"
+        f'robocopy "{source_dir}" "{install_dir}" /E /NFL /NDL /NJH /NJS /NP /R:2 /W:2 /LOG:"%TEMP%\\clipnest-update.log"\r\n'
         'if errorlevel 8 goto update_failed\r\n'
         f'start "" "{install_dir}\\{exe_name}"\r\n'
         '(goto) 2>nul & del "%~f0"\r\n'
         ':update_failed\r\n'
-        'echo ClipNest update failed. Files may be locked or the install directory may not be writable.\r\n'
-        'echo Extracted update files: "%~dp0"\r\n'
-        'pause\r\n'
-        'exit /b 1\r\n'
+        'echo failed > "%TEMP%\\clipnest-update-error.txt"\r\n'
+        'echo ClipNest update failed. See "%TEMP%\\clipnest-update.log".\r\n'
+        f'start "" "{install_dir}\\{exe_name}"\r\n'
+        '(goto) 2>nul & del "%~f0"\r\n'
     )
 
 
@@ -245,6 +284,26 @@ class _CheckTask(QRunnable):
         if not re.fullmatch(r"[0-9a-f]{64}", info["sha256"]):
             self._signals.failed.emit("GitHub 发布信息缺少有效的 SHA-256 摘要")
             return
+        setup_asset = next(
+            (
+                item
+                for item in (release.get("assets") or [])
+                if item.get("name") == _SETUP_NAME
+            ),
+            None,
+        )
+        if setup_asset is not None:
+            setup_sha = (
+                str(setup_asset.get("digest") or "")
+                .removeprefix("sha256:")
+                .lower()
+            )
+            if re.fullmatch(r"[0-9a-f]{64}", setup_sha):
+                info["setup_url"] = str(
+                    setup_asset.get("browser_download_url") or ""
+                )
+                info["setup_size"] = int(setup_asset.get("size") or 0)
+                info["setup_sha256"] = setup_sha
         logger.info("[Update] latest release = %s", info["tag"])
         self._signals.finished.emit(info)
 
@@ -267,7 +326,10 @@ class _DownloadTask(QRunnable):
 
     def run(self) -> None:
         temp_dir = tempfile.mkdtemp(prefix="clipnest-download-")
-        zip_path = os.path.join(temp_dir, f"ClipNest-{_ASSET_NAME}")
+        file_name = os.path.basename(urlparse(self._url).path) or _ASSET_NAME
+        if not file_name.lower().endswith((".zip", ".exe")):
+            file_name = _ASSET_NAME
+        zip_path = os.path.join(temp_dir, file_name)
         try:
             if not re.fullmatch(r"[0-9a-f]{64}", self._expected_sha256):
                 raise ValueError("发布信息缺少有效的 SHA-256 摘要。")
@@ -336,12 +398,32 @@ class UpdateService(QObject):
             )
         )
 
-    def apply_update(self, zip_path: str) -> tuple[bool, str]:
-        """Extract the new build and hand off to a detached updater script."""
+    # The UI keeps the same info dict; the download source depends on install mode.
+    @staticmethod
+    def prepare_update_info(info: dict) -> dict:
+        selected = dict(info)
+        setup_url = str(selected.get("setup_url") or "").strip()
+        setup_sha = str(selected.get("setup_sha256") or "").strip().lower()
+        if is_installed_install() and setup_url and re.fullmatch(
+            r"[0-9a-f]{64}", setup_sha
+        ):
+            selected["url"] = setup_url
+            selected["size"] = int(selected.get("setup_size") or 0)
+            selected["sha256"] = setup_sha
+            selected["kind"] = "setup"
+        else:
+            selected["kind"] = "zip"
+        return selected
+
+    def apply_update(self, archive_path: str) -> tuple[bool, str]:
+        """Install a Setup package, or fall back to the portable ZIP updater."""
         from PySide6.QtWidgets import QApplication
 
         if not is_frozen():
             return False, "开发模式下无法自动安装更新。"
+        if archive_path.lower().endswith(".exe"):
+            return self._apply_setup_update(archive_path)
+        zip_path = archive_path
         validation_error = validate_update_archive(zip_path)
         if validation_error:
             return False, validation_error
@@ -362,10 +444,57 @@ class UpdateService(QObject):
                 bat_file.write(bat_content)
             subprocess.Popen(
                 ["cmd", "/c", bat_path],
-                creationflags=subprocess.CREATE_NEW_CONSOLE,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 close_fds=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
         except Exception as exc:
             return False, f"启动安装程序失败：{exc}"
         logger.info("[Update] updater launched: %s -> %s", extract_dir, install_dir)
+        return True, ""
+
+    def _apply_setup_update(self, setup_path: str) -> tuple[bool, str]:
+        from PySide6.QtWidgets import QApplication
+
+        if sys.platform != "win32":
+            return False, "安装包更新仅支持 Windows。"
+        if not is_installed_install():
+            return False, "当前为便携版，无法使用安装包更新。"
+        try:
+            with open(setup_path, "rb") as installer:
+                if installer.read(2) != b"MZ":
+                    return False, "安装包格式无效。"
+        except OSError as exc:
+            return False, f"读取安装包失败：{exc}"
+
+        install_dir = QApplication.applicationDirPath()
+        log_path = os.path.join(tempfile.gettempdir(), "clipnest-update.log")
+        args = [
+            setup_path,
+            "/VERYSILENT",
+            "/SUPPRESSMSGBOXES",
+            "/NORESTART",
+            "/CLOSEAPPLICATIONS",
+            f"/DIR={install_dir}",
+            f"/LOG={log_path}",
+        ]
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = subprocess.SW_HIDE
+        try:
+            subprocess.Popen(
+                args,
+                close_fds=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                startupinfo=startupinfo,
+            )
+        except Exception as exc:
+            return False, f"启动安装包失败：{exc}"
+        logger.info(
+            "[Update] silent installer launched: %s -> %s log=%s",
+            setup_path,
+            install_dir,
+            log_path,
+        )
         return True, ""

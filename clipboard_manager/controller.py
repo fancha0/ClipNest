@@ -20,7 +20,7 @@ from .services.focus_service import FocusService, FocusTarget
 from .services.hotkey_service import HotkeyService
 from .services.paste_service import PasteService
 from .services.autostart_service import AutoStartService
-from .services.update_service import UpdateService, is_newer
+from .services.update_service import UpdateService, consume_update_error, is_newer
 from .services.diagnostic_service import set_diagnostic_logging
 from .ui.main_window import MainWindow
 from .ui.dialog_base import load_dialog_sizes_from_setting, dump_dialog_sizes_to_setting
@@ -166,6 +166,14 @@ class AppController:
         self._connect_signals()
 
     def initialize(self) -> None:
+        if consume_update_error():
+            QTimer.singleShot(
+                800,
+                lambda: self._window.show_error(
+                    "上次更新未完成，已保留旧版本。\n"
+                    "更新日志：%TEMP%\\clipnest-update.log"
+                ),
+            )
         self._auto_check_update = (
             self._repository.get_setting("auto_check_update") or "1"
         ) == "1"
@@ -1411,6 +1419,7 @@ class AppController:
     def _on_update_check_succeeded(self, info: dict) -> None:
         self._update_check_running = False
         self._window.set_update_checking(False)
+        info = self._update_service.prepare_update_info(info)
         version = str(info.get("version") or "")
         newer = bool(version) and is_newer(version)
         self._window.notify_update_check_result(version or "未知", newer)

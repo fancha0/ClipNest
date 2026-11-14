@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from clipboard_manager.services.update_service import (
+    UpdateService,
     _parse_manifest,
     _pick_asset,
     build_updater_bat,
@@ -76,6 +77,110 @@ class ManifestParseTests(unittest.TestCase):
             )
         )
 
+    def test_manifest_includes_optional_setup_asset(self) -> None:
+        info = _parse_manifest(
+            {
+                "version": "0.2.0",
+                "url": "https://x/y.zip",
+                "size": 10,
+                "sha256": "a" * 64,
+                "setup_url": "https://x/ClipNest-Setup.exe",
+                "setup_size": 20,
+                "setup_sha256": "b" * 64,
+            }
+        )
+        self.assertIsNotNone(info)
+        self.assertEqual(info["setup_url"], "https://x/ClipNest-Setup.exe")
+        self.assertEqual(info["setup_size"], 20)
+        self.assertEqual(info["setup_sha256"], "b" * 64)
+
+    def test_invalid_setup_digest_disables_setup_asset(self) -> None:
+        info = _parse_manifest(
+            {
+                "version": "0.2.0",
+                "url": "https://x/y.zip",
+                "sha256": "a" * 64,
+                "setup_url": "https://x/ClipNest-Setup.exe",
+                "setup_sha256": "bad",
+            }
+        )
+        self.assertEqual(info["setup_url"], "")
+
+
+class UpdateInfoSelectionTests(unittest.TestCase):
+    def _info(self) -> dict:
+        return {
+            "version": "0.2.0",
+            "url": "https://x/ClipNest-Windows.zip",
+            "size": 10,
+            "sha256": "a" * 64,
+            "setup_url": "https://x/ClipNest-Setup.exe",
+            "setup_size": 20,
+            "setup_sha256": "b" * 64,
+        }
+
+    def test_installed_build_prefers_setup(self) -> None:
+        from unittest import mock
+
+        from clipboard_manager.services import update_service
+
+        with mock.patch.object(
+            update_service, "is_installed_install", return_value=True
+        ):
+            selected = UpdateService.prepare_update_info(self._info())
+        self.assertEqual(selected["kind"], "setup")
+        self.assertEqual(selected["url"], "https://x/ClipNest-Setup.exe")
+        self.assertEqual(selected["size"], 20)
+        self.assertEqual(selected["sha256"], "b" * 64)
+
+    def test_portable_build_uses_zip(self) -> None:
+        from unittest import mock
+
+        from clipboard_manager.services import update_service
+
+        with mock.patch.object(
+            update_service, "is_installed_install", return_value=False
+        ):
+            selected = UpdateService.prepare_update_info(self._info())
+        self.assertEqual(selected["kind"], "zip")
+        self.assertEqual(selected["url"], "https://x/ClipNest-Windows.zip")
+        self.assertEqual(selected["size"], 10)
+
+
+class SetupUpdateTests(unittest.TestCase):
+    def test_setup_launch_is_silent_and_uses_install_dir(self) -> None:
+        import tempfile
+        from unittest import mock
+
+        from clipboard_manager.services import update_service
+
+        with tempfile.NamedTemporaryFile(suffix=".exe", delete=False) as setup_file:
+            setup_file.write(b"MZ")
+            setup_path = setup_file.name
+        service = UpdateService()
+        try:
+            with mock.patch.object(
+                update_service, "is_installed_install", return_value=True
+            ), mock.patch(
+                "PySide6.QtWidgets.QApplication.applicationDirPath",
+                return_value=r"C:\Apps\ClipNest",
+            ), mock.patch.object(
+                update_service.subprocess, "Popen"
+            ) as popen:
+                ok, error = service._apply_setup_update(setup_path)
+            self.assertTrue(ok, error)
+            args = popen.call_args.args[0]
+            self.assertIn("/VERYSILENT", args)
+            self.assertIn("/SUPPRESSMSGBOXES", args)
+            self.assertIn("/CLOSEAPPLICATIONS", args)
+            self.assertIn(r"/DIR=C:\Apps\ClipNest", args)
+            self.assertNotIn("/RESTARTAPPLICATIONS", args)
+            self.assertIn("startupinfo", popen.call_args.kwargs)
+        finally:
+            import os
+
+            os.remove(setup_path)
+
 
 class UpdaterBatTests(unittest.TestCase):
     def test_bat_contains_copy_launch_and_self_delete(self) -> None:
@@ -87,10 +192,29 @@ class UpdaterBatTests(unittest.TestCase):
         self.assertIn('start "" "C:\\apps\\ClipNest\\ClipNest.exe"', bat)
         self.assertIn('del "%~f0"', bat)
         self.assertIn('if errorlevel 8 goto update_failed', bat)
-        self.assertLess(bat.index('if errorlevel 8'), bat.index('start ""'))
+        self.assertIn('/LOG:"%TEMP%\\clipnest-update.log"', bat)
+        self.assertIn('clipnest-update-error.txt', bat)
+        self.assertNotIn('pause', bat)
         failure_branch = bat.split(':update_failed\r\n', 1)[1]
-        self.assertNotIn('start ""', failure_branch)
-        self.assertIn('exit /b 1', failure_branch)
+        self.assertIn('start ""', failure_branch)
+
+
+class UpdateErrorMarkerTests(unittest.TestCase):
+    def test_consume_error_marker_reads_once(self) -> None:
+        import tempfile
+        from unittest import mock
+
+        from clipboard_manager.services import update_service
+
+        with tempfile.TemporaryDirectory() as directory:
+            marker = f"{directory}/clipnest-update-error.txt"
+            with open(marker, "w", encoding="utf-8") as handle:
+                handle.write("failed")
+            with mock.patch.object(
+                update_service.tempfile, "gettempdir", return_value=directory
+            ):
+                self.assertTrue(update_service.consume_update_error())
+                self.assertFalse(update_service.consume_update_error())
 
 
 class UpdateArchiveValidationTests(unittest.TestCase):
