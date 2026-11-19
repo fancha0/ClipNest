@@ -17,6 +17,7 @@ from PySide6.QtCore import QByteArray, QBuffer, QIODevice, Qt
 from PySide6.QtGui import QImage
 
 from .config import DEFAULT_TABS, MAX_ITEMS_PER_TAB, default_hotkey
+from .image_formats import detect_image_format
 from .models import (
     BundleImage,
     ClipItem,
@@ -264,8 +265,11 @@ class ClipRepository:
     def _make_thumbnail_blob(image_bytes: bytes, max_edge: int = 112) -> bytes | None:
         if not image_bytes:
             return None
+        image_format = detect_image_format(image_bytes)
+        if image_format is None:
+            return None
         image = QImage()
-        if not image.loadFromData(image_bytes):
+        if not image.loadFromData(image_bytes, image_format):
             return None
         thumb = image.scaled(
             max_edge,

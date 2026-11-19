@@ -8,6 +8,7 @@ from typing import Iterable
 from PySide6.QtCore import QByteArray, QBuffer, QIODevice, Qt
 from PySide6.QtGui import QImage
 
+from ..image_formats import detect_image_format
 from ..models import ParsedClipboardItem
 
 
@@ -184,8 +185,12 @@ class ClipboardContentParser:
                 mime_type = str(part["mime_type"]).lower()
                 if not mime_type.startswith("image/"):
                     continue
+                payload = bytes(part["payload_blob"])
+                image_format = detect_image_format(payload)
+                if image_format is None:
+                    continue
                 candidate = QImage()
-                if candidate.loadFromData(bytes(part["payload_blob"])):
+                if candidate.loadFromData(payload, image_format):
                     image = candidate
                     break
 
