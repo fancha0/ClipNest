@@ -289,6 +289,9 @@ class AppController:
         self._hotkey_service.hotkey_pressed.connect(self._on_hotkey_pressed)
         self._window.window_shown.connect(self._on_window_shown)
         self._window.capture_enabled_changed.connect(self._on_capture_enabled_changed)
+        self._window.tray_theme_change_requested.connect(
+            self._on_tray_theme_change_requested
+        )
         self._capture_hotkey_service.hotkey_pressed.connect(self._on_capture_hotkey_pressed)
         self._window.clear_all_data_requested.connect(self._on_clear_all_data)
         self._window.vacuum_database_requested.connect(self._on_vacuum_database_requested)
@@ -453,6 +456,14 @@ class AppController:
         if mode != "follow_system":
             return
         self._theme_mode = mode
+        self._apply_theme_for_current_mode()
+
+    def _on_tray_theme_change_requested(self, mode: str) -> None:
+        normalized = normalize_theme_mode(mode)
+        if normalized == self._theme_mode:
+            return
+        self._theme_mode = normalized
+        self._repository.set_setting("theme_mode", normalized)
         self._apply_theme_for_current_mode()
 
     def _on_hotkey_pressed(self) -> None:

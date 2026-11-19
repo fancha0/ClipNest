@@ -94,6 +94,25 @@ class PanelVisibilityTests(unittest.TestCase):
         window.hide()
         window.deleteLater()
 
+    def test_tray_theme_menu_actions_and_signal(self) -> None:
+        from PySide6.QtWidgets import QMenu
+
+        window = MainWindow()
+        menu = QMenu()
+        window._add_tray_theme_menu(menu, False)
+        self.assertEqual(
+            set(window._tray_theme_actions),
+            {"follow_system", "light", "dark"},
+        )
+        window.set_theme_mode("dark")
+        self.assertTrue(window._tray_theme_actions["dark"].isChecked())
+        self.assertFalse(window._tray_theme_actions["light"].isChecked())
+        received: list[str] = []
+        window.tray_theme_change_requested.connect(received.append)
+        window._tray_theme_actions["light"].trigger()
+        self.assertEqual(received, ["light"])
+        window.deleteLater()
+
     def test_manual_resize_geometry_respects_edges_and_minimum(self) -> None:
         from PySide6.QtCore import QPoint, QRect
 

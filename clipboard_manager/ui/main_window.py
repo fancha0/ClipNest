@@ -28,6 +28,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QAction,
+    QActionGroup,
     QCloseEvent,
     QColor,
     QCursor,
@@ -1313,6 +1314,7 @@ class MainWindow(QMainWindow):
     save_inline_edit_requested = Signal(int, object)
     autostart_change_requested = Signal(bool)
     capture_enabled_changed = Signal(bool)
+    tray_theme_change_requested = Signal(str)
     clear_all_data_requested = Signal()
     vacuum_database_requested = Signal()
     window_shown = Signal()
@@ -1373,6 +1375,7 @@ class MainWindow(QMainWindow):
         self._capture_enabled = True
         self._capture_hotkey_hint = "Ctrl+Shift+P"
         self._capture_toggle_action: Optional[QAction] = None
+        self._tray_theme_actions: dict[str, QAction] = {}
         self._data_stats_provider = None
         self._vacuum_progress_dialog: Optional[ProgressDialog] = None
         self._note_text_color = "#1f2937"
@@ -1690,6 +1693,11 @@ class MainWindow(QMainWindow):
         if action is not None:
             action.blockSignals(True)
             action.setChecked(self._capture_enabled)
+            action.setText(
+                "自动记录剪贴板（已暂停）"
+                if not self._capture_enabled
+                else "自动记录剪贴板"
+            )
             action.blockSignals(False)
         tray = getattr(self, "_tray_icon", None)
         if tray is not None:
@@ -2361,6 +2369,7 @@ class MainWindow(QMainWindow):
 
     def set_theme_mode(self, mode: str) -> None:
         self._theme_mode = str(mode or "follow_system")
+        self._sync_tray_theme_actions()
 
     def theme_mode(self) -> str:
         return getattr(self, "_theme_mode", "follow_system")
@@ -3077,6 +3086,8 @@ class MainWindow(QMainWindow):
         )
         self._capture_toggle_action.setCheckable(True)
         self._capture_toggle_action.setChecked(bool(self._capture_enabled))
+        self._add_tray_theme_menu(self._tray_menu, dark)
+        self._tray_menu.addSeparator()
         exit_action = self._tray_menu.addAction(menu_icon("exit", dark), "退出程序")
         show_action.triggered.connect(self.show_for_quick_paste)
         self._capture_toggle_action.toggled.connect(self._on_capture_toggle_action)
@@ -3084,6 +3095,43 @@ class MainWindow(QMainWindow):
         self._tray_icon.setContextMenu(self._tray_menu)
         self._tray_icon.activated.connect(self._on_tray_activated)
         self._tray_icon.show()
+
+    def _add_tray_theme_menu(self, menu: QMenu, dark: bool) -> QMenu:
+        theme_menu = menu.addMenu(menu_icon("gear", dark), "主题")
+        self._tray_theme_menu = theme_menu
+        theme_menu.setObjectName("glassMenu")
+        theme_menu.setStyleSheet(self._menu_stylesheet())
+        group = QActionGroup(theme_menu)
+        group.setExclusive(True)
+        self._tray_theme_actions = {}
+        for mode, label in (
+            ("follow_system", "跟随系统"),
+            ("light", "浅色"),
+            ("dark", "深色"),
+        ):
+            action = theme_menu.addAction(label)
+            action.setCheckable(True)
+            action.setData(mode)
+            action.triggered.connect(
+                lambda _checked=False, value=mode: self.tray_theme_change_requested.emit(
+                    value
+                )
+            )
+            group.addAction(action)
+            self._tray_theme_actions[mode] = action
+        self._tray_theme_group = group
+        self._sync_tray_theme_actions()
+        return theme_menu
+
+    def _sync_tray_theme_actions(self) -> None:
+        actions = getattr(self, "_tray_theme_actions", None)
+        if not actions:
+            return
+        current = self.theme_mode()
+        for mode, action in actions.items():
+            action.blockSignals(True)
+            action.setChecked(mode == current)
+            action.blockSignals(False)
 
     def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         if reason in (
@@ -3567,6 +3615,9 @@ class MainWindow(QMainWindow):
             self._refresh_capture_button()
             if self._tray_menu is not None:
                 self._tray_menu.setStyleSheet(self._menu_stylesheet())
+            theme_menu = getattr(self, "_tray_theme_menu", None)
+            if theme_menu is not None:
+                theme_menu.setStyleSheet(self._menu_stylesheet())
         finally:
             self.setUpdatesEnabled(True)
         self._repaint_surfaces()
